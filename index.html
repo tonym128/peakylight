@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PeakyLight - 3D Sun Position & Light Analysis</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #FFFDE7; /* Light cream */
+            color: #424242; /* Dark gray */
+            line-height: 1.6;
+        }
+
+        .sun-icon {
+            width: 60px;
+            height: 60px;
+            color: #FFEB3B;
+            margin-bottom: 10px;
+            filter: drop-shadow(0 2px 3px rgba(0,0,0,0.2));
+            animation: spin 20s linear infinite;
+        }
+
+        @keyframes spin {
+            from {
+                transform: rotate(0deg);
+            }
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        header {
+            background: linear-gradient(135deg, #FFC107, #FF9800); /* Sunny gradient */
+            color: #fff;
+            padding: 40px 20px;
+            text-align: center;
+            border-bottom: 3px solid #FFA000;
+            text-shadow: 1px 1px 3px rgba(0,0,0,0.3);
+        }
+
+        header h1 {
+            margin: 0;
+            font-size: 2.5em;
+        }
+
+        header p {
+            font-size: 1.2em;
+            color: #FFFDE7;
+            opacity: 0.9;
+        }
+
+        main {
+            max-width: 900px;
+            margin: 40px auto;
+            padding: 0 20px;
+        }
+
+        section {
+            background: #ffffff;
+            padding: 25px;
+            margin-bottom: 30px;
+            border-radius: 10px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+
+        h2 {
+            color: #FF8F00; /* Amber */
+            border-bottom: 1px solid #eee;
+            padding-bottom: 10px;
+            margin-top: 0;
+        }
+
+        ul, ol {
+            padding-left: 20px;
+        }
+
+        li {
+            margin-bottom: 10px;
+        }
+
+        strong {
+            color: #212121;
+        }
+
+        #launch {
+            text-align: center;
+        }
+
+        .launch-button {
+            display: inline-block;
+            background-color: #FF9800; /* Orange */
+            color: #fff;
+            padding: 15px 30px;
+            text-decoration: none;
+            font-size: 1.2em;
+            font-weight: bold;
+            border-radius: 8px;
+            transition: background-color 0.3s, transform 0.2s, border-bottom-width 0.2s;
+            margin-top: 20px;
+            border-bottom: 2px solid #E65100;
+        }
+
+        .launch-button:hover {
+            background-color: #FB8C00; /* Lighter orange on hover */
+            transform: translateY(-2px);
+            border-bottom-width: 4px;
+        }
+
+        footer {
+            text-align: center;
+            padding: 20px;
+            margin-top: 40px;
+            font-size: 0.9em;
+            color: #757575;
+            border-top: 1px solid #eee;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <svg class="sun-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M12 17C14.7614 17 17 14.7614 17 12C17 9.23858 14.7614 7 12 7C9.23858 7 7 9.23858 7 12C7 14.7614 9.23858 17 12 17Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M12 1V3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M12 21V23" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M4.22 4.22L5.64 5.64" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M18.36 18.36L19.78 19.78" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M1 12H3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M21 12H23" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M4.22 19.78L5.64 18.36" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M18.36 5.64L19.78 4.22" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <h1>Welcome to PeakyLight</h1>
+        <p>Your personal 3D sun position and topographic light analysis tool.</p>
+    </header>
+
+    <main>
+        <section id="about">
+            <h2>What is PeakyLight?</h2>
+            <p>PeakyLight is an interactive web application that provides a detailed 3D visualization of the sun's path and its interaction with the local terrain for any location on Earth. It goes beyond simple astronomical calculations by factoring in the actual topography, showing you when your specific location will truly see the sun rise and set over hills and mountains.</p>
+            <ul>
+                <li><strong>3D Terrain Visualization:</strong> See a realistic 3D model of the landscape around your chosen point.</li>
+                <li><strong>Accurate Sun Path:</strong> Watch the sun's arc across the sky for any date and time.</li>
+                <li><strong>Topographic Sunrise/Sunset:</strong> Discover the actual time the sun will appear and disappear from view, considering obstructions like mountains.</li>
+                <li><strong>Interactive Controls:</strong> Easily change location, date, and time to explore different scenarios.</li>
+                <li><strong>Detailed Reporting:</strong> Generate monthly and yearly reports on light conditions, complete with PDF export and scene imagery.</li>
+            </ul>
+        </section>
+
+        <section id="how-to-use">
+            <h2>How to Use the App</h2>
+            <p>Using PeakyLight is simple. Once you launch the application, you'll see a 3D view and a controls panel. The main steps are:</p>
+            <ol>
+                <li><strong>Set Your Location:</strong> Use your device's GPS, search by address, enter coordinates, or click "Select Location on Map" to pick a point directly on the 3D terrain.</li>
+                <li><strong>Choose a Date and Time:</strong> Use the date picker and time slider to set a specific moment. You can also animate the sun's movement through a full day or an entire year.</li>
+                <li><strong>Analyze the View:</strong> The info panel displays both standard (astronomical) and topographic sunrise/sunset times. The yellow arc in the sky shows the sun's path, with grayed-out portions indicating when the sun is blocked by terrain.</li>
+                <li><strong>Generate Reports:</strong> Click "Generate Monthly Report" for a detailed breakdown of light conditions for the entire year. You can export this report to a PDF, which includes images of the sunrise and sunset for each period.</li>
+            </ol>
+        </section>
+
+        <section id="launch">
+            <h2>Ready to Explore?</h2>
+            <p>Click the button below to launch the PeakyLight application and start analyzing the sun's light at your location.</p>
+            <a href="peakylight.html" class="launch-button">Launch PeakyLight App</a>
+        </section>
+    </main>
+
+    <footer>
+        <p>&copy; 2024 PeakyLight Application. All rights reserved.</p>
+    </footer>
+</body>
+</html>
