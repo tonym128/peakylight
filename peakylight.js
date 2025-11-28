@@ -158,9 +158,10 @@ L.TileLayer.Cached = L.TileLayer.extend({
         const originalOnError = L.Util.bind(this._tileOnError, this, done, tile);
 
         const customOnLoad = () => {
-            if (tile.src.startsWith('blob:')) {
-                URL.revokeObjectURL(tile.src);
-            }
+            // The blob URL is revoked in the dataManager, but we should check just in case.
+            // if (tile.src.startsWith('blob:')) {
+            //     URL.revokeObjectURL(tile.src);
+            // }
             originalOnLoad();
         };
 
@@ -175,7 +176,7 @@ L.TileLayer.Cached = L.TileLayer.extend({
 
         const tileUrl = this.getTileUrl(coords);
 
-        getCachedTileUrl(tileUrl).then(url => {
+        dataManager.getCachedTileUrl(tileUrl).then(url => {
             tile.src = url;
         }).catch(() => {
             // Fallback on error
@@ -340,109 +341,6 @@ function setupScene() {
     controls.update();
 }
 
-// --- Caching with IndexedDB ---
-const dbCache = {
-    db: null,
-    dbName: 'PeakyLightTileCache',
-    storeName: 'tiles',
-    async init() {
-        if (this.db) return Promise.resolve(this.db);
-        return new Promise((resolve, reject) => {
-            const request = indexedDB.open(this.dbName, 1);
-            request.onerror = (event) => {
-                console.error("IndexedDB error:", event.target.error);
-                reject("IndexedDB not available");
-            };
-            request.onsuccess = (event) => {
-                this.db = event.target.result;
-                resolve(this.db);
-            };
-            request.onupgradeneeded = (event) => {
-                const db = event.target.result;
-                if (!db.objectStoreNames.contains(this.storeName)) {
-                    db.createObjectStore(this.storeName, { keyPath: 'url' });
-                }
-            };
-        });
-    },
-    async getTile(url) {
-        try {
-            await this.init();
-            return new Promise((resolve, reject) => {
-                const transaction = this.db.transaction([this.storeName], 'readonly');
-                const store = transaction.objectStore(this.storeName);
-                const request = store.get(url);
-                request.onsuccess = (event) => resolve(event.target.result ? event.target.result.blob : null);
-                request.onerror = (event) => {
-                    console.error("Error getting tile from IndexedDB:", event.target.error);
-                    reject(event.target.error);
-                };
-            });
-        } catch (e) {
-            console.error("DB not available for getTile", e);
-            return null;
-        }
-    },
-    async saveTile(url, blob) {
-        try {
-            await this.init();
-            const transaction = this.db.transaction([this.storeName], 'readwrite');
-            const store = transaction.objectStore(this.storeName);
-            store.put({ url: url, blob: blob });
-        } catch (e) {
-            console.warn("DB not available for saveTile, caching disabled for this item.", e);
-        }
-    }
-};
-
-async function getCachedBlobUrl(url) {
-    const cachedBlob = await dbCache.getTile(url).catch(() => null);
-    if (cachedBlob) return URL.createObjectURL(cachedBlob);
-
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(`Failed to fetch ${url}: ${response.statusText}`);
-    const blob = await response.blob();
-    dbCache.saveTile(url, blob); // Fire and forget
-    return URL.createObjectURL(blob);
-}
-
-async function getCachedTexture(url) {
-    try {
-        const blobUrl = await getCachedBlobUrl(url);
-        const texture = await textureLoader.loadAsync(blobUrl);
-        URL.revokeObjectURL(blobUrl); // Clean up blob URL after texture is loaded
-        return texture;
-    } catch (error) {
-        console.error(`Failed to load texture from ${url}`, error);
-        throw error;
-    }
-}
-
-async function getCachedTileUrl(url) {
-    try {
-        return await getCachedBlobUrl(url);
-    } catch (error) {
-        console.error(`Failed to get cached tile URL for ${url}`, error);
-        return url; // Fallback to original url on error
-    }
-}
-
-function lonLatToTileCoords(lon, lat, zoom) {
-    const n = Math.pow(2, zoom);
-    const xtile = n * ((lon + 180) / 360);
-    const latRad = lat * Math.PI / 180;
-    const ytile = n * (1 - (Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI)) / 2;
-    return { x: xtile, y: ytile, z: zoom };
-}
-
-function tileCoordsToLonLat(xtile, ytile, zoom) {
-    const n = Math.pow(2, zoom);
-    const lon_deg = xtile / n * 360.0 - 180.0;
-    const lat_rad = Math.atan(Math.sinh(Math.PI * (1 - 2 * ytile / n)));
-    const lat_deg = lat_rad * 180.0 / Math.PI;
-    return { lat: lat_deg, lon: lon_deg };
-}
-
 async function updateTerrain() {
     // Check if location has changed enough to warrant a reload.
     if (lastTerrainLocation.lat !== null &&
@@ -467,7 +365,7 @@ async function updateTerrain() {
     scene.background = new THREE.Color(0xFFFDE7); // Match page background
     
     const tileWorldSize = getTileWorldSizeForZoom(mapZoom);
-    const preciseTileCoords = lonLatToTileCoords(currentLocation.lon, currentLocation.lat, mapZoom);
+    const preciseTileCoords = dataManager.lonLatToTileCoords(currentLocation.lon, currentLocation.lat, mapZoom);
     const centralTileCoords = { x: Math.floor(preciseTileCoords.x), y: Math.floor(preciseTileCoords.y), z: mapZoom };
 
     const offsetX = preciseTileCoords.x - centralTileCoords.x;
@@ -530,42 +428,24 @@ async function updateTerrain() {
 }
 
 async function updateTile(terrainMesh, satelliteUrl, heightmapUrl) {
-    const [satelliteTexture, heightmapTexture] = await Promise.all([
-        getCachedTexture(satelliteUrl),
-        getCachedTexture(heightmapUrl)
-    ]);
+    const tileData = await dataManager.getTileData(satelliteUrl, heightmapUrl);
 
-    terrainMesh.material.map = satelliteTexture;
+    terrainMesh.material.map = tileData.satelliteTexture;
     terrainMesh.material.needsUpdate = true;
-
-    const canvas = document.createElement('canvas');
-    const context = canvas.getContext('2d');
-    const img = heightmapTexture.image;
-    canvas.width = img.width;
-    canvas.height = img.height;
-    context.drawImage(img, 0, 0);
-    const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
-    const data = imageData.data;
 
     const geometry = terrainMesh.geometry;
     const vertices = geometry.attributes.position;
     const { topVerticesCount, edgeToSkirtMap, skirtDepth } = geometry.userData;
 
-    const heightArray = new Float32Array(topVerticesCount);
     for (let i = 0; i < topVerticesCount; i++) {
-        const r = data[i * 4], g = data[i * 4 + 1], b = data[i * 4 + 2];
-        const height = (r * 256 + g + b / 256) - 32768;
-        const scaledHeight = height * 0.005;
-        vertices.setZ(i, scaledHeight);
-        heightArray[i] = scaledHeight;
+        vertices.setZ(i, tileData.heights[i]);
     }
 
     // Update skirt vertices heights to match their corresponding edge vertex
     if (edgeToSkirtMap && skirtDepth !== undefined) {
         for (const [edgeIndex, skirtRelativeIndex] of edgeToSkirtMap.entries()) {
             const edgeHeight = vertices.getZ(edgeIndex);
-            const skirtIndex = topVerticesCount + skirtRelativeIndex;
-            vertices.setZ(skirtIndex, edgeHeight - skirtDepth);
+            vertices.setZ(topVerticesCount + skirtRelativeIndex, edgeHeight - skirtDepth);
         }
     }
 
@@ -573,9 +453,9 @@ async function updateTile(terrainMesh, satelliteUrl, heightmapUrl) {
     geometry.computeVertexNormals();
 
     terrainHeightData[terrainMesh.name] = {
-        heights: heightArray,
-        width: img.width,
-        height: img.height
+        heights: tileData.heights,
+        width: tileData.width,
+        height: tileData.height
     };
 }
 
@@ -868,6 +748,61 @@ async function calculateTopoTimes() {
     document.getElementById('total-daylight-loss').textContent = formatDuration(totalLossMs);
 
     updateSunArc(times, topoSunrise, topoSunset);
+    updateDaylightDiagram(times, topoSunrise, topoSunset);
+}
+function updateDaylightTooltip(astronomicalTimes, topoSunrise, topoSunset) {
+    const tooltip = document.getElementById('daylight-tooltip');
+    if (!tooltip) return;
+
+    const astroSunrise = astronomicalTimes.sunrise;
+    const astroSunset = astronomicalTimes.sunset;
+
+    const tooltipContent = `
+        Astro Rise: ${formatTime(astroSunrise, selectedTimezone)}<br>
+        Topo Rise: ${formatTime(topoSunrise, selectedTimezone)}<br>
+        Topo Set: ${formatTime(topoSunset, selectedTimezone)}<br>
+        Astro Set: ${formatTime(astroSunset, selectedTimezone)}`;
+    tooltip.innerHTML = tooltipContent;
+}
+
+function updateDaylightDiagram(astronomicalTimes, topoSunrise, topoSunset) {
+    const canvas = document.getElementById('daylight-diagram');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const width = canvas.width;
+    const height = canvas.height;
+
+    const astroSunrise = astronomicalTimes.sunrise;
+    const astroSunset = astronomicalTimes.sunset;
+
+    if (!astroSunrise || !astroSunset || isNaN(astroSunrise) || isNaN(astroSunset)) {
+        ctx.clearRect(0, 0, width, height);
+        return;
+    }
+
+    const dayStart = new Date(astroSunrise).setHours(0, 0, 0, 0);
+    const dayEnd = new Date(astroSunrise).setHours(23, 59, 59, 999);
+    const totalDayMs = dayEnd - dayStart;
+
+    const astroSunrisePercent = (astroSunrise.getTime() - dayStart) / totalDayMs;
+    const astroSunsetPercent = (astroSunset.getTime() - dayStart) / totalDayMs;
+    const topoSunrisePercent = (topoSunrise.getTime() - dayStart) / totalDayMs;
+    const topoSunsetPercent = (topoSunset.getTime() - dayStart) / totalDayMs;
+
+    // Background (night)
+    ctx.fillStyle = '#2c3e50'; // Dark blue/gray
+    ctx.fillRect(0, 0, width, height);
+
+    // Astronomical daylight (potential daylight)
+    ctx.fillStyle = '#bdc3c7'; // Light gray
+    ctx.fillRect(astroSunrisePercent * width, 0, (astroSunsetPercent - astroSunrisePercent) * width, height);
+
+    // Topographical daylight (actual daylight)
+    ctx.fillStyle = '#f1c40f'; // Yellow
+    ctx.fillRect(topoSunrisePercent * width, 0, (topoSunsetPercent - topoSunrisePercent) * width, height);
+
+    // Update the tooltip content
+    updateDaylightTooltip(astronomicalTimes, topoSunrise, topoSunset);
 }
 
 function updateSliderIndicators() {
@@ -1506,9 +1441,7 @@ const debouncedAddressSearch = debounce(async (query) => {
         document.getElementById('address-results').innerHTML = '';
         return;
     }
-    const response = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=5`);
-    const data = await response.json();
-    const resultsContainer = document.getElementById('address-results');
+    const data = await dataManager.searchAddresses(query);    const resultsContainer = document.getElementById('address-results');
     resultsContainer.innerHTML = '';
     if (data && data.length > 0) {
         data.forEach(result => {
@@ -2071,6 +2004,7 @@ function populateTimezones() {
 // --- Initialization ---
 function init() {
     getStateFromUrl();
+    dataManager.init(textureLoader);
     populateTimezones();
     initMap();
     setupScene();
@@ -2119,10 +2053,10 @@ function init() {
             const tileWorldSize = getTileWorldSizeForZoom(mapZoom);
             
             // Convert the 3D world point back to geographical coordinates
-            const preciseTileCoords = lonLatToTileCoords(currentLocation.lon, currentLocation.lat, mapZoom);
+            const preciseTileCoords = dataManager.lonLatToTileCoords(currentLocation.lon, currentLocation.lat, mapZoom);
             const newXTile = preciseTileCoords.x + intersectPoint.x / tileWorldSize;
             const newYTile = preciseTileCoords.y + intersectPoint.z / tileWorldSize;
-            const newCoords = tileCoordsToLonLat(newXTile, newYTile, mapZoom);
+            const newCoords = dataManager.tileCoordsToLonLat(newXTile, newYTile, mapZoom);
 
             currentLocation = { lat: newCoords.lat, lon: newCoords.lon };
             marker.setLatLng([newCoords.lat, newCoords.lon]);
