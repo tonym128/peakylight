@@ -640,7 +640,7 @@ function getTerrainHeightAt(worldX, worldZ) {
 function isLocationSunlit(date) {
     if (Object.keys(terrainHeightData).length === 0) return { isLit: true, intersectionPoint: null };
 
-    const sunPosition = getSunPosition(date);
+    const sunPosition = getSunPosition(date, 10);
     const targetPosition = locationMarker.position;
 
     if (sunPosition.y < targetPosition.y - 5) {
@@ -675,7 +675,7 @@ function isLocationSunlit(date) {
 }
 
 function updateSunPosition() {
-    const sunPosition = getSunPosition(selectedDate);
+    const sunPosition = getSunPosition(selectedDate, 10);
     sunLight.position.copy(sunPosition);
     sunLight.target.position.set(0, 0, 0);
     
@@ -735,7 +735,7 @@ function updateSunArc(astronomicalTimes, topoSunrise, topoSunset) {
     for (let i = 0; i <= segments; i++) {
         const percentOfDay = i / segments;
         const time = new Date(sunriseTime + totalDaylight * percentOfDay);
-        pathPoints.push(getSunPosition(time, 18)); // Arc radius of 18
+        pathPoints.push(getSunPosition(time, 10)); // Arc radius of 10
     }
 
     const curve = new THREE.CatmullRomCurve3(pathPoints);
