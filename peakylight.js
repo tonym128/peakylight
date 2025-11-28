@@ -17,13 +17,17 @@ controls.maxPolarAngle = Math.PI / 2 - 0.05; // Prevent camera from going below 
 let currentLocation = { lat: -25.2744, lon: 133.7751 };
 let selectedDate = new Date();
 let currentSunTimes = {};
-let lastTerrainLocation = { lat: null, lon: null };
 let selectedTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-let map, marker, leafletTileLayer;
+let lastTerrainLocation = { lat: null, lon: null }; // Keep for terrain-specific logic
 let mapZoom = 13; // Default to Medium detail
-let isLocationSelectionMode = false;
-let isYearAnimating = false;
-const MAP_LAYERS = {
+let terrainHeightData = {};
+let animationConfig = {
+    type: 'sunrise', // 'sunrise' or 'sunset'
+    day: 1,
+    frameCounter: 0,
+    framesPerDay: 5 // Speed of animation
+};
+const mapLayerConfigs = {
     'opentopo': {
         name: 'OpenTopoMap',
         leafletUrl: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
@@ -43,20 +47,14 @@ const MAP_LAYERS = {
         threeUrl: (z, x, y) => `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`
     }
 };
-let currentMapLayer = 'opentopo';
-let terrainHeightData = {};
-let animationConfig = {
-    type: 'sunrise', // 'sunrise' or 'sunset'
-    day: 1,
-    frameCounter: 0,
-    framesPerDay: 5 // Speed of animation
-};
 let topoTimesCache = {
     lat: null,
     lon: null,
     year: null,
     data: {} // dayOfYear -> { topoSunrise, topoSunset }
 };
+let currentMapLayer = 'opentopo';
+let isYearAnimating = false;
 
 function getStateFromUrl() {
     const params = new URLSearchParams(window.location.search);
@@ -95,7 +93,7 @@ function getStateFromUrl() {
         }
     }
 
-    if (layer && MAP_LAYERS[layer]) {
+    if (layer && mapLayerConfigs[layer]) {
         currentMapLayer = layer;
         document.getElementById('map-layer-picker').value = layer;
     }
@@ -148,59 +146,6 @@ function debounce(func, wait) {
     };
 }
 const debouncedUpdateUrl = debounce(updateUrlWithState, 500);
-
-// --- Leaflet Caching Layer ---
-L.TileLayer.Cached = L.TileLayer.extend({
-    createTile: function (coords, done) {
-        const tile = document.createElement('img');
-
-        const originalOnLoad = L.Util.bind(this._tileOnLoad, this, done, tile);
-        const originalOnError = L.Util.bind(this._tileOnError, this, done, tile);
-
-        const customOnLoad = () => {
-            // The blob URL is revoked in the dataManager, but we should check just in case.
-            // if (tile.src.startsWith('blob:')) {
-            //     URL.revokeObjectURL(tile.src);
-            // }
-            originalOnLoad();
-        };
-
-        L.DomEvent.on(tile, 'load', customOnLoad);
-        L.DomEvent.on(tile, 'error', originalOnError);
-
-        if (this.options.crossOrigin) {
-            tile.crossOrigin = '';
-        }
-        tile.alt = '';
-        tile.setAttribute('role', 'presentation');
-
-        const tileUrl = this.getTileUrl(coords);
-
-        dataManager.getCachedTileUrl(tileUrl).then(url => {
-            tile.src = url;
-        }).catch(() => {
-            // Fallback on error
-            tile.src = tileUrl;
-        });
-
-        return tile;
-    }
-});
-
-L.tileLayer.cached = function (url, options) {
-    return new L.TileLayer.Cached(url, options);
-};
-
-// --- Map Initialization ---
-function initMap() {
-    map = L.map('map').setView([currentLocation.lat, currentLocation.lon], mapZoom);
-    const layerConfig = MAP_LAYERS[currentMapLayer];
-    leafletTileLayer = L.tileLayer.cached(layerConfig.leafletUrl, {
-        attribution: layerConfig.leafletAttribution
-    }).addTo(map);
-
-    marker = L.marker([currentLocation.lat, currentLocation.lon]).addTo(map);
-}
 
 // --- 3D Scene Setup ---
 let terrainGrid, sunLight, locationMarker, sunRayLine, sunArcMesh;
@@ -391,7 +336,7 @@ async function updateTerrain() {
             const tileX = centralTileCoords.x + j;
             const tileY = centralTileCoords.y + i;
             const heightmapUrl = `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${centralTileCoords.z}/${tileX}/${tileY}.png`;
-            const satelliteUrl = MAP_LAYERS[currentMapLayer].threeUrl(centralTileCoords.z, tileX, tileY);
+            const satelliteUrl = mapLayerConfigs[currentMapLayer].threeUrl(centralTileCoords.z, tileX, tileY);
             const terrainMesh = terrainGrid.getObjectByName(`tile_${i}_${j}`);
             if (terrainMesh) {
                 terrainMesh.scale.set(scaleFactor, scaleFactor, 1);
@@ -1313,22 +1258,11 @@ async function exportSplitScreenVideo() {
 }
 
 // --- Event Listeners ---
-document.getElementById('locate-btn').addEventListener('click', () => {
-    if (navigator.geolocation) {
-        navigator.geolocation.getCurrentPosition(position => {
-            currentLocation = { lat: position.coords.latitude, lon: position.coords.longitude };
-            map.setView([currentLocation.lat, currentLocation.lon], mapZoom);
-            marker.setLatLng([currentLocation.lat, currentLocation.lon]);
-            updateAll();
-        });
-    }
-});
-
 document.getElementById('terrain-detail-picker').addEventListener('input', (e) => {
     const newZoom = parseInt(e.target.value);
     if (newZoom !== mapZoom) {
         mapZoom = newZoom;
-        map.setZoom(mapZoom);
+        mappingManager.updateMapState(currentLocation, mapZoom);
         updateAll();
     }
 });
@@ -1341,17 +1275,6 @@ document.getElementById('jump-to-sunrise').addEventListener('click', () => jumpT
 document.getElementById('jump-to-topo-sunrise').addEventListener('click', () => jumpToTime(currentSunTimes.topoSunrise));
 document.getElementById('jump-to-sunset').addEventListener('click', () => jumpToTime(currentSunTimes.sunset));
 document.getElementById('jump-to-topo-sunset').addEventListener('click', () => jumpToTime(currentSunTimes.topoSunset));
-
-document.getElementById('update-coords-btn').addEventListener('click', () => {
-    const lat = parseFloat(document.getElementById('lat-input').value);
-    const lon = parseFloat(document.getElementById('lon-input').value);
-    if (!isNaN(lat) && !isNaN(lon)) {
-        currentLocation = { lat, lon };
-        map.setView([lat, lon], mapZoom);
-        marker.setLatLng([lat, lon]);
-        updateAll();
-    }
-});
 
 document.getElementById('timezone-picker').addEventListener('input', (e) => {
     selectedTimezone = e.target.value;
@@ -1434,40 +1357,6 @@ document.getElementById('time-slider').addEventListener('input', (e) => {
 document.getElementById('toggle-controls-btn').addEventListener('click', () => {
     const controlsPanel = document.getElementById('controls');
     controlsPanel.classList.toggle('collapsed');
-});
-
-const debouncedAddressSearch = debounce(async (query) => {
-    if (query.length < 3) {
-        document.getElementById('address-results').innerHTML = '';
-        return;
-    }
-    const data = await dataManager.searchAddresses(query);    const resultsContainer = document.getElementById('address-results');
-    resultsContainer.innerHTML = '';
-    if (data && data.length > 0) {
-        data.forEach(result => {
-            const item = document.createElement('div');
-            item.classList.add('address-result-item');
-            item.textContent = result.display_name;
-            item.dataset.lon = result.lon;
-            item.dataset.lat = result.lat;
-            resultsContainer.appendChild(item);
-        });
-    }
-}, 250);
-
-document.getElementById('address-search').addEventListener('input', (e) => debouncedAddressSearch(e.target.value));
-
-document.getElementById('address-results').addEventListener('click', (e) => {
-    if (e.target.classList.contains('address-result-item')) {
-        const lat = parseFloat(e.target.dataset.lat);
-        const lon = parseFloat(e.target.dataset.lon);
-        currentLocation = { lat, lon };
-        map.setView([lat, lon], mapZoom);
-        marker.setLatLng([lat, lon]);
-        updateAll();
-        document.getElementById('address-results').innerHTML = '';
-        document.getElementById('address-search').value = e.target.textContent;
-    }
 });
 
 document.getElementById('animate-sunrise-btn').addEventListener('click', () => startYearAnimation('sunrise'));
@@ -1655,20 +1544,14 @@ function animate() {
 }
 
 function switchMapLayer(layerKey) {
-    if (!MAP_LAYERS[layerKey] || layerKey === currentMapLayer) {
-        return;
-    }
+    if (layerKey === currentMapLayer) return;
 
-    currentMapLayer = layerKey;
-
-    // Update Leaflet 2D map
-    if (leafletTileLayer) {
-        map.removeLayer(leafletTileLayer);
-    }
-    const layerConfig = MAP_LAYERS[currentMapLayer];
-    leafletTileLayer = L.tileLayer.cached(layerConfig.leafletUrl, {
-        attribution: layerConfig.leafletAttribution
-    }).addTo(map);
+    mappingManager.switchMapLayer(layerKey, (newLayer) => {
+        currentMapLayer = newLayer;
+        lastTerrainLocation = { lat: null, lon: null }; // Force terrain reload
+        updateTerrain();
+        updateUrlWithState();
+    });
 
     // Force terrain to reload with new textures
     lastTerrainLocation = { lat: null, lon: null };
@@ -2004,66 +1887,42 @@ function populateTimezones() {
 // --- Initialization ---
 function init() {
     getStateFromUrl();
+    // This function will be called by mappingManager when the location changes
+    const handleLocationChange = (newLocation) => {
+        currentLocation = newLocation;
+        updateAll();
+    };
+
     dataManager.init(textureLoader);
     populateTimezones();
-    initMap();
+    const mapInterface = mappingManager.init(
+        { lat: currentLocation.lat, lon: currentLocation.lon, zoom: mapZoom, layer: currentMapLayer, layers: mapLayerConfigs },
+        handleLocationChange
+    );
     setupScene();
     updateAll();
     animate();
-    
-    const selectLocationBtn = document.getElementById('select-location-btn');
-
-    function enterSelectionMode() {
-        isLocationSelectionMode = true;
-        canvas.style.cursor = 'crosshair';
-        selectLocationBtn.textContent = 'Cancel Selection';
-        selectLocationBtn.style.backgroundColor = '#dc3545'; // Red for cancel/active state
-        controls.enableRotate = false; // Disable rotation to allow for easy panning
-    }
-
-    function exitSelectionMode() {
-        isLocationSelectionMode = false;
-        canvas.style.cursor = 'grab';
-        selectLocationBtn.textContent = 'Select Location on Map';
-        selectLocationBtn.style.backgroundColor = ''; // Revert to default
-        controls.enableRotate = true;
-    }
-
-    selectLocationBtn.addEventListener('click', () => {
-        if (isLocationSelectionMode) {
-            exitSelectionMode();
-        } else {
-            enterSelectionMode();
-        }
-    });
 
     canvas.addEventListener('click', (e) => {
-        if (!isLocationSelectionMode) return;
+        if (!mapInterface.isSelectionModeActive()) return;
 
-        // Use raycasting to find the precise 3D point on the terrain
         const mouse = new THREE.Vector2();
         mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
         mouse.y = - (e.clientY / window.innerHeight) * 2 + 1;
 
         raycaster.setFromCamera(mouse, camera);
         const intersects = raycaster.intersectObjects(terrainGrid.children);
-
         if (intersects.length > 0) {
             const intersectPoint = intersects[0].point;
             const tileWorldSize = getTileWorldSizeForZoom(mapZoom);
-            
-            // Convert the 3D world point back to geographical coordinates
             const preciseTileCoords = dataManager.lonLatToTileCoords(currentLocation.lon, currentLocation.lat, mapZoom);
             const newXTile = preciseTileCoords.x + intersectPoint.x / tileWorldSize;
             const newYTile = preciseTileCoords.y + intersectPoint.z / tileWorldSize;
             const newCoords = dataManager.tileCoordsToLonLat(newXTile, newYTile, mapZoom);
 
-            currentLocation = { lat: newCoords.lat, lon: newCoords.lon };
-            marker.setLatLng([newCoords.lat, newCoords.lon]);
-            map.panTo([newCoords.lat, newCoords.lon]);
-            
-            exitSelectionMode(); // Automatically exit selection mode after a successful click
-            updateAll();
+            mapInterface.exitSelectionMode();
+            mappingManager.updateMapState(newCoords, mapZoom);
+            handleLocationChange(newCoords);
         }
     });
 }
