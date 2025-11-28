@@ -806,17 +806,6 @@ function updateInfoDisplay() {
 
 
 
-// --- Animation ---
-function stopAnimations() {
-    if (isYearAnimating) {
-        isYearAnimating = false;
-        controls.enabled = true;
-
-        document.getElementById('stop-animation-btn').style.display = 'none';
-        document.querySelector('.animation-controls').style.display = 'flex';
-    }
-}
-
 async function cacheYearlyTopoTimes() {
     const year = selectedDate.getFullYear();
     // Check if cache is valid
@@ -865,32 +854,11 @@ async function cacheYearlyTopoTimes() {
     return true;
 }
 
-async function startYearAnimation(type) {
-    stopAnimations();
-    
-    const cacheSuccess = await cacheYearlyTopoTimes();
-    if (!cacheSuccess) {
-        alert("Could not generate animation data.");
-        return;
-    }
-
-    isYearAnimating = true;
-    animationConfig.type = type;
-    animationConfig.day = 1;
-    animationConfig.frameCounter = 0;
-    
-    document.getElementById('stop-animation-btn').style.display = 'block';
-    document.querySelector('.animation-controls').style.display = 'none';
-    
-    controls.enabled = false;
-}
-
 // --- Time Navigation ---
 function jumpToTime(time) {
     if (!time || isNaN(time)) return;
     
     selectedDate = new Date(time);
-    stopAnimations();
     updateInfoDisplay();
     updateSunPosition();
     debouncedUpdateUrl();
@@ -898,186 +866,9 @@ function jumpToTime(time) {
 
 async function exportVideo(type) {
     stopAnimations();
-
-    // 1. Pre-cache all data to make frame generation fast
-    const cacheSuccess = await cacheYearlyTopoTimes();
-    if (!cacheSuccess) {
-        alert("Could not generate animation data for export.");
-        return;
-    }
-
-    const loader = document.getElementById('loader');
-    const loaderText = document.getElementById('loader-text');
-    const progressBar = document.getElementById('progress-bar');
-    loaderText.textContent = `Exporting ${type} video...`;
-    progressBar.style.width = '0%';
-    loader.style.display = 'block';
-
-    // 2. Setup for export (canvas, dimensions, etc.)
-    const exportWidth = 1920;
-    const exportHeight = 1080;
-    const fps = 30;
-    const framesPerDay = 12; // How many frames to render for each day for a smoother video.
-
-    const originalWidth = canvas.width;
-    const originalHeight = canvas.height;
-    const originalDate = new Date(selectedDate);
-
-    renderer.setSize(exportWidth, exportHeight);
-    camera.aspect = exportWidth / exportHeight;
-    camera.updateProjectionMatrix();
-
-    // 3. Setup MediaRecorder
-    const tempCanvas = document.createElement('canvas');
-    tempCanvas.width = exportWidth;
-    tempCanvas.height = exportHeight;
-    const tempCtx = tempCanvas.getContext('2d');
-
-    const mimeType = 'video/mp4';
-    const isMp4Supported = MediaRecorder.isTypeSupported(mimeType);
-    const finalMimeType = isMp4Supported ? mimeType : 'video/webm';
-    const fileExtension = isMp4Supported ? 'mp4' : 'webm';
-
-    const stream = tempCanvas.captureStream(fps);
-    const recorder = new MediaRecorder(stream, { mimeType: finalMimeType, videoBitsPerSecond: 1000000 });
-    const recordedChunks = [];
-
-    recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-            recordedChunks.push(event.data);
-        }
-    };
-
-    recorder.onstop = async () => {
-        const blob = new Blob(recordedChunks, { type: finalMimeType });
-        const url = URL.createObjectURL(blob);
-
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = `mylight-${type}-export-${year}.${fileExtension}`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
-
-        // Restore original state
-        renderer.setSize(originalWidth, originalHeight);
-        camera.aspect = originalWidth / originalHeight;
-        camera.updateProjectionMatrix();
-        selectedDate = originalDate;
-        
-        updateInfoDisplay();
-        updateSunPosition();
-        await calculateTopoTimes();
-        debouncedUpdateUrl();
-
-        loader.style.display = 'none';
-    };
-
-    // 4. Animation loop
-    let day = 1;
-    let frameInDay = 0;
-    const year = topoTimesCache.year;
-    const isLeap = new Date(year, 1, 29).getDate() === 29;
-    const daysInYear = isLeap ? 366 : 365;
-    const totalFrames = daysInYear * framesPerDay;
-    let currentFrame = 0;
-
-    recorder.start();
-
-    function renderFrame() {
-        if (day > daysInYear) {
-            recorder.stop();
-            return;
-        }
-
-        const cachedTimes = topoTimesCache.data[day];
-        if (cachedTimes) {
-            selectedDate = (type === 'sunrise') ? cachedTimes.topoSunrise : cachedTimes.topoSunset;
-            
-            // Fast updates using cached data
-            const astronomicalTimes = { sunrise: cachedTimes.sunrise, sunset: cachedTimes.sunset };
-            currentSunTimes.sunrise = astronomicalTimes.sunrise;
-            currentSunTimes.sunset = astronomicalTimes.sunset;
-            currentSunTimes.topoSunrise = cachedTimes.topoSunrise;
-            currentSunTimes.topoSunset = cachedTimes.topoSunset;
-            updateInfoDisplay();
-            updateSunPosition();
-            updateSunArc(astronomicalTimes, cachedTimes.topoSunrise, cachedTimes.topoSunset);
-
-            // Panning camera - interpolate for smoothness
-            const dayProgress = (day - 1 + (frameInDay / framesPerDay)) / daysInYear;
-            const angle = dayProgress * Math.PI * 2;
-            const distance = 25;
-            const height = 10;
-            camera.position.set(distance * Math.sin(angle), height, distance * Math.cos(angle));
-            controls.target.set(0, 0, 0);
-            controls.update();
-
-            // Render WebGL and composite with overlay
-            renderer.render(scene, camera);
-            const sourceCanvas = renderer.domElement;
-
-            const sunriseDiffMs = (astronomicalTimes.sunrise && cachedTimes.topoSunrise && !isNaN(astronomicalTimes.sunrise) && !isNaN(cachedTimes.topoSunrise))
-                ? astronomicalTimes.sunrise.getTime() - cachedTimes.topoSunrise.getTime()
-                : 0;
-            const sunsetDiffMs = (astronomicalTimes.sunset && cachedTimes.topoSunset && !isNaN(astronomicalTimes.sunset) && !isNaN(cachedTimes.topoSunset))
-                ? cachedTimes.topoSunset.getTime() - astronomicalTimes.sunset.getTime()
-                : 0;
-            const totalLostMs = sunriseDiffMs + sunsetDiffMs;
-
-            const textLines = [
-                `Location: ${document.getElementById('location-coords').textContent}`,
-                `Date: ${selectedDate.toLocaleDateString([], { timeZone: selectedTimezone })}`,
-                `Time: ${selectedDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, timeZone: selectedTimezone })}`,
-                '', // spacer
-                `Sunrise: ${formatTime(astronomicalTimes.sunrise, selectedTimezone)}`,
-                `Topo Sunrise: ${formatTime(cachedTimes.topoSunrise, selectedTimezone)}`,
-                `  └ Diff: ${formatTimeDiff(sunriseDiffMs)}`,
-                '', // spacer
-                `Sunset: ${formatTime(astronomicalTimes.sunset, selectedTimezone)}`,
-                `Topo Sunset: ${formatTime(cachedTimes.topoSunset, selectedTimezone)}`,
-                `  └ Diff: ${formatTimeDiff(sunsetDiffMs)}`,
-                '', // spacer
-                `Total Daylight Lost: ${formatTimeDiff(totalLostMs)}`
-            ];
-
-            const lineHeight = 22;
-            const textMargin = 15;
-            const panelWidth = 450;
-            const panelHeight = textLines.length * lineHeight;
-
-            tempCtx.drawImage(sourceCanvas, 0, 0);
-            tempCtx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-            tempCtx.fillRect(10, 10, panelWidth, panelHeight);
-            tempCtx.fillStyle = '#f0f0f0';
-            tempCtx.font = `18px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif`;
-            tempCtx.textAlign = 'left';
-
-            textLines.forEach((line, index) => {
-                tempCtx.fillText(line, 10 + textMargin, 10 + textMargin + (index * lineHeight));
-            });
-        }
-
-        // Update progress and counters
-        currentFrame++;
-        progressBar.style.width = `${(currentFrame / totalFrames) * 100}%`;
-        
-        frameInDay++;
-        if (frameInDay >= framesPerDay) {
-            frameInDay = 0;
-            day++;
-        }
-
-        requestAnimationFrame(renderFrame);
-    }
-
-    renderFrame();
 }
 
 async function exportSplitScreenVideo() {
-    stopAnimations();
-
     // 1. Pre-cache all data to make frame generation fast
     const cacheSuccess = await cacheYearlyTopoTimes();
     if (!cacheSuccess) {
@@ -1119,7 +910,7 @@ async function exportSplitScreenVideo() {
     const fileExtension = isMp4Supported ? 'mp4' : 'webm';
 
     const stream = tempCanvas.captureStream(fps);
-    const recorder = new MediaRecorder(stream, { mimeType: finalMimeType, videoBitsPerSecond: 1000000 });
+    const recorder = new MediaRecorder(stream, { mimeType: finalMimeType, videoBitsPerSecond: 10000000 });
     const recordedChunks = [];
 
     recorder.ondataavailable = (event) => {
@@ -1278,7 +1069,6 @@ document.getElementById('jump-to-topo-sunset').addEventListener('click', () => j
 
 document.getElementById('timezone-picker').addEventListener('input', (e) => {
     selectedTimezone = e.target.value;
-    stopAnimations();
     updateInfoDisplay();
     calculateTopoTimes();
     updateUrlWithState();
@@ -1301,7 +1091,6 @@ document.getElementById('date-picker').addEventListener('input', (e) => {
     }
     selectedDate = tentativeDate;
 
-    stopAnimations();
     updateInfoDisplay();
     updateSunPosition();
     calculateTopoTimes();
@@ -1359,12 +1148,6 @@ document.getElementById('toggle-controls-btn').addEventListener('click', () => {
     controlsPanel.classList.toggle('collapsed');
 });
 
-document.getElementById('animate-sunrise-btn').addEventListener('click', () => startYearAnimation('sunrise'));
-document.getElementById('animate-sunset-btn').addEventListener('click', () => startYearAnimation('sunset'));
-document.getElementById('stop-animation-btn').addEventListener('click', stopAnimations);
-
-document.getElementById('export-sunrise-btn').addEventListener('click', () => exportVideo('sunrise'));
-document.getElementById('export-sunset-btn').addEventListener('click', () => exportVideo('sunset'));
 document.getElementById('export-split-btn').addEventListener('click', () => exportSplitScreenVideo());
 
 document.getElementById('compass').addEventListener('click', () => {
@@ -1461,47 +1244,6 @@ function exportLandscape() {
 function animate() {
     requestAnimationFrame(animate);
 
-    if (isYearAnimating) {
-        animationConfig.frameCounter++;
-        if (animationConfig.frameCounter >= animationConfig.framesPerDay) {
-            animationConfig.frameCounter = 0;
-            animationConfig.day++;
-            
-            const year = topoTimesCache.year;
-            const isLeap = new Date(year, 1, 29).getDate() === 29;
-            const daysInYear = isLeap ? 366 : 365;
-
-            if (animationConfig.day > daysInYear) {
-                stopAnimations();
-            } else {
-                const cachedTimes = topoTimesCache.data[animationConfig.day];
-                if (cachedTimes) {
-                    selectedDate = animationConfig.type === 'sunrise' ? cachedTimes.topoSunrise : cachedTimes.topoSunset;
-                    
-                    // These functions will update the scene and UI based on the new selectedDate
-                    calculateTopoTimes(); // This is async, but it's fine. It will update the arc when it can.
-                    updateSunPosition();
-                    updateInfoDisplay();
-                }
-            }
-        }
-        
-        if (isYearAnimating) { // Check again in case stopAnimations() was called
-            const year = topoTimesCache.year;
-            const isLeap = new Date(year, 1, 29).getDate() === 29;
-            const daysInYear = isLeap ? 366 : 365;
-            const angle = (animationConfig.day / daysInYear) * Math.PI * 2;
-            const distance = 25;
-            const height = 10;
-            camera.position.set(
-                distance * Math.sin(angle),
-                height,
-                distance * Math.cos(angle)
-            );
-            controls.target.set(0, 0, 0);
-        }
-    }
-
     controls.update();
 
     // Prevent camera and target from going below ground during user navigation
@@ -1561,7 +1303,6 @@ function switchMapLayer(layerKey) {
 }
 
 function updateAll() {
-    stopAnimations();
     terrainHeightData = {}; // Clear height data on location change
 
     // Invalidate cache if location changed
@@ -1709,7 +1450,6 @@ function renderReportTable(data) {
 
             // Don't call updateAll() as it hides the report panel.
             // Instead, call the necessary update functions directly.
-            stopAnimations();
             updateInfoDisplay();
             await updateTerrain(); // This will take the fast path for time-only changes.
             updateUrlWithState();
