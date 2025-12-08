@@ -2,7 +2,9 @@
 
 ## About
 
-This is a simple web project called PeakyLight.
+This is a serverless web application to fetch and show you astronomical daylight vs topographical daylight at any place on earth. In short, it shows you how much less sun you will get than your weather forecast for your area predicts.
+
+It shows sunrise and sunset differences on any day of the year, using the topographical layout of the surrounding land. You can get a monthly report and export a video for every day of the year to view the differences.
 
 ## How to Use
 
@@ -11,6 +13,8 @@ This is a simple web project called PeakyLight.
 ## How to Run
 
 This project consists of static HTML files. To view them, you can open the `.html` files directly in your browser. However, for a more realistic development and testing environment, it's recommended to use a local web server.
+
+You can view the website at https://tonym128.github.io/peakylight/ which would be the same as hosting this yourself.
 
 ### Using Python's built-in server
 
