@@ -14,7 +14,7 @@ controls.maxDistance = 100;
 controls.maxPolarAngle = Math.PI / 2 - 0.05; // Prevent camera from going below the horizon
 
 // --- State Management ---
-let currentLocation = { lat: -25.2744, lon: 133.7751 };
+let currentLocation = { lat: -37.755, lon: 145.697 };
 let selectedDate = new Date();
 let currentSunTimes = {};
 let selectedTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
