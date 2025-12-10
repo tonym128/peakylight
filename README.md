@@ -68,9 +68,6 @@ The PeakyLight application utilizes several external data sources and libraries 
 *   **Elevation Data:**
     *   **Amazon Web Services (AWS) Terrain Tiles:** Provides elevation data for rendering the 3D terrain.
 
-*   **Location Services:**
-    *   **what3words API:** Used to convert 3-word addresses into geographic coordinates (latitude and longitude).
-
 *   **PDF Generation:**
     *   **jsPDF & jsPDF-AutoTable:** Libraries used to generate and export reports as PDF documents.
 
