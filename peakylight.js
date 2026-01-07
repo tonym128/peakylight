@@ -1059,6 +1059,128 @@ async function exportSplitScreenVideo() {
     renderFrame();
 }
 
+// --- Solar System Calculator ---
+function calculateSolarRecommendations(dailyKwh, offGridPercent, overrideSunHours = null) {
+    // Check for user override of effective sun hours
+    let sunHoursForCalculation;
+    let sunHoursSource = 'calculated';
+    
+    if (overrideSunHours !== null && overrideSunHours > 0) {
+        // User provided override
+        sunHoursForCalculation = overrideSunHours;
+        sunHoursSource = 'user-override';
+    } else if (worstDaySunlightHours !== null) {
+        // Use worst day sunlight hours if available from monthly report
+        sunHoursForCalculation = worstDaySunlightHours;
+        sunHoursSource = 'worst-day';
+    } else {
+        // Fallback to current day's sunlight hours if no report has been generated
+        let sunriseTime = currentSunTimes.topoSunrise || currentSunTimes.sunrise;
+        let sunsetTime = currentSunTimes.topoSunset || currentSunTimes.sunset;
+        
+        // If no topo times available, calculate from astronomical times
+        if (!sunriseTime || !sunsetTime) {
+            const times = SunCalc.getTimes(selectedDate, currentLocation.lat, currentLocation.lon);
+            sunriseTime = times.sunrise;
+            sunsetTime = times.sunset;
+        }
+        
+        const sunriseHour = sunriseTime.getHours() + sunriseTime.getMinutes() / 60;
+        const sunsetHour = sunsetTime.getHours() + sunsetTime.getMinutes() / 60;
+        sunHoursForCalculation = Math.max(0, sunsetHour - sunriseHour);
+        sunHoursSource = 'current-day';
+    }
+    
+    // Use topographic times for current day display
+    let sunriseTime = currentSunTimes.topoSunrise || currentSunTimes.sunrise;
+    let sunsetTime = currentSunTimes.topoSunset || currentSunTimes.sunset;
+    
+    // If no topo times available yet, calculate from astronomical times
+    if (!sunriseTime || !sunsetTime) {
+        const times = SunCalc.getTimes(selectedDate, currentLocation.lat, currentLocation.lon);
+        sunriseTime = times.sunrise;
+        sunsetTime = times.sunset;
+    }
+    
+    // Calculate actual usable sun hours accounting for terrain occlusion
+    const sunriseHour = sunriseTime.getHours() + sunriseTime.getMinutes() / 60;
+    const sunsetHour = sunsetTime.getHours() + sunsetTime.getMinutes() / 60;
+    const actualSunHours = Math.max(0, sunsetHour - sunriseHour);
+    
+    // Also calculate theoretical sun hours for comparison
+    const times = SunCalc.getTimes(selectedDate, currentLocation.lat, currentLocation.lon);
+    const theoreticalSunrise = times.sunrise.getHours() + times.sunrise.getMinutes() / 60;
+    const theoreticalSunset = times.sunset.getHours() + times.sunset.getMinutes() / 60;
+    const theoreticalSunHours = Math.max(0, theoreticalSunset - theoreticalSunrise);
+    
+    // Calculate terrain occlusion loss
+    const occlusionLoss = theoreticalSunHours - actualSunHours;
+    
+    // Get actual cloud cover for this location and month
+    let cloudCoverResult = getTypicalCloudCover(currentLocation.lat, selectedDate.getMonth() + 1);
+    let cloudCoverSource = 'climatological';
+    let cloudCoverPercent = cloudCoverResult;
+    
+    // If getAverageCloudCover has been called and returned source info, parse it
+    // This is a fallback - the actual real-time call happens in getAverageCloudCover
+    
+    const cloudCoverFactor = (100 - cloudCoverPercent) / 100; // Convert cloud cover % to clear sky factor
+    const effectiveSunHours = sunHoursForCalculation * cloudCoverFactor;
+    
+    // Energy requirement
+    const targetEnergy = (dailyKwh * offGridPercent) / 100;
+    
+    // Conservative: 1.25x safety factor
+    const conservativePanelSize = (targetEnergy * 1.25) / Math.max(effectiveSunHours, 1);
+    const conservativeBattery = targetEnergy * 2; // 2 days of storage
+    
+    // Optimal: 1.5x safety factor
+    const optimalPanelSize = (targetEnergy * 1.5) / Math.max(effectiveSunHours, 1);
+    const optimalBattery = targetEnergy * 2.5; // 2.5 days of storage
+    
+    // Premium: 2.0x safety factor
+    const premiumPanelSize = (targetEnergy * 2.0) / Math.max(effectiveSunHours, 1);
+    const premiumBattery = targetEnergy * 3.5; // 3.5 days of storage
+    
+    const sunlightHours = currentLocation.lat > 0 ? 
+        (new Date().getMonth() < 6 ? 'increasing' : 'decreasing') :
+        (new Date().getMonth() < 6 ? 'decreasing' : 'increasing');
+    
+    return {
+        theoreticalSunHours,
+        actualSunHours,
+        occlusionLoss,
+        effectiveSunHours,
+        targetEnergy,
+        sunriseTime,
+        sunsetTime,
+        cloudCoverPercent,
+        cloudCoverFactor,
+        cloudCoverSource: cloudCoverSource,
+        worstDaySunHours: worstDaySunlightHours,
+        sunHoursSource: sunHoursSource,
+        sunHoursForCalculation: sunHoursForCalculation,
+        sunlightTrend: sunlightHours,
+        recommendations: {
+            conservative: {
+                panelSize: conservativePanelSize,
+                battery: conservativeBattery,
+                description: 'Conservative: Higher safety margins, handles cloudy days'
+            },
+            optimal: {
+                panelSize: optimalPanelSize,
+                battery: optimalBattery,
+                description: 'Optimal: Balanced cost and reliability'
+            },
+            premium: {
+                panelSize: premiumPanelSize,
+                battery: premiumBattery,
+                description: 'Premium: Maximum reliability, handles extended poor weather'
+            }
+        }
+    };
+}
+
 // --- Event Listeners ---
 document.getElementById('terrain-detail-picker').addEventListener('input', (e) => {
     const newZoom = parseInt(e.target.value);
@@ -1173,6 +1295,158 @@ document.getElementById('compass').addEventListener('click', () => {
     );
     controls.update();
 });
+
+document.getElementById('open-solar-btn').addEventListener('click', () => {
+    const solarPanel = document.getElementById('solar-panel');
+    solarPanel.style.display = 'block';
+    updateSunHoursInfo();
+});
+
+document.getElementById('close-solar-btn').addEventListener('click', () => {
+    const solarPanel = document.getElementById('solar-panel');
+    solarPanel.style.display = 'none';
+});
+
+// Update sun hours info when override input changes
+document.getElementById('effective-sun-hours-override').addEventListener('input', updateSunHoursInfo);
+
+function updateSunHoursInfo() {
+    const overrideValue = document.getElementById('effective-sun-hours-override').value;
+    const infoElement = document.getElementById('sun-hours-info');
+    
+    if (overrideValue) {
+        infoElement.textContent = `✓ Using custom value: ${overrideValue} hours`;
+        infoElement.style.color = '#d32f2f';
+    } else {
+        // Show calculated value
+        let calculatedHours = null;
+        if (worstDaySunlightHours !== null && worstDaySunlightHours > 0) {
+            calculatedHours = worstDaySunlightHours;
+            infoElement.textContent = `📊 Calculated from worst day: ${worstDaySunlightHours.toFixed(1)} hours`;
+            infoElement.style.color = '#2e7d32';
+        } else if (currentSunTimes.topoSunrise instanceof Date && currentSunTimes.topoSunset instanceof Date) {
+            const sunriseHour = currentSunTimes.topoSunrise.getHours() + currentSunTimes.topoSunrise.getMinutes() / 60;
+            const sunsetHour = currentSunTimes.topoSunset.getHours() + currentSunTimes.topoSunset.getMinutes() / 60;
+            calculatedHours = Math.max(0, sunsetHour - sunriseHour);
+            if (calculatedHours > 0) {
+                infoElement.textContent = `📊 Calculated from today: ${calculatedHours.toFixed(1)} hours`;
+                infoElement.style.color = '#666';
+            } else {
+                infoElement.textContent = 'Generate monthly report for best sizing';
+                infoElement.style.color = '#f57c00';
+            }
+        } else {
+            infoElement.textContent = 'Generate monthly report for best sizing';
+            infoElement.style.color = '#f57c00';
+        }
+    }
+}
+
+document.getElementById('calculate-solar-btn').addEventListener('click', async () => {
+    const dailyKwh = parseFloat(document.getElementById('daily-kwh').value);
+    const offGridPercent = parseFloat(document.getElementById('offgrid-percent').value);
+    const overrideSunHours = document.getElementById('effective-sun-hours-override').value ? 
+        parseFloat(document.getElementById('effective-sun-hours-override').value) : null;
+    
+    if (isNaN(dailyKwh) || dailyKwh <= 0 || isNaN(offGridPercent) || offGridPercent < 0 || offGridPercent > 100) {
+        alert('Please enter valid values for daily power requirement and off-grid percentage');
+        return;
+    }
+    
+    if (overrideSunHours !== null && (isNaN(overrideSunHours) || overrideSunHours <= 0)) {
+        alert('If provided, override sun hours must be a positive number');
+        return;
+    }
+    
+    // If monthly report hasn't been generated yet, generate it automatically
+    if (worstDaySunlightHours === null && overrideSunHours === null) {
+        console.log('Generating monthly report for worst-case solar sizing...');
+        // Generate report silently without showing UI elements, but show a status
+        const originalDisplay = document.getElementById('solar-results').innerHTML;
+        document.getElementById('solar-results').innerHTML = '<p style="color: #f57c00;">⏳ Generating monthly report for worst-case sizing...</p>';
+        
+        try {
+            await generateMonthlyReport(false);
+            document.getElementById('solar-results').innerHTML = originalDisplay;
+        } catch (error) {
+            console.error('Error generating monthly report:', error);
+            document.getElementById('solar-results').innerHTML = '<p style="color: #d32f2f;">Error generating report. Using current day calculations.</p>';
+        }
+    }
+    
+    const results = calculateSolarRecommendations(dailyKwh, offGridPercent, overrideSunHours);
+    displaySolarResults(results);
+});
+
+function displaySolarResults(results) {
+    let html = `
+        <div style="margin-bottom: 15px; padding: 10px; background-color: #e3f2fd; border-radius: 5px;">
+            <p><strong>Location Info:</strong></p>
+            <p>📍 ${currentLocation.name || 'Selected Location'}</p>
+    `;
+    
+    // Show sun hours information with source indicator
+    let sourceLabel = '';
+    if (results.sunHoursSource === 'user-override') {
+        sourceLabel = ' (user-defined override ✏️)';
+        html += `<p style="color: #d32f2f; font-weight: bold;">⚠️ Using custom override value: <strong>${results.sunHoursForCalculation.toFixed(1)}</strong> hours${sourceLabel}</p>`;
+    } else if (results.worstDaySunHours !== null && results.sunHoursSource === 'worst-day') {
+        html += `<p>🏔️ Worst day sunlight: <strong>${results.worstDaySunHours.toFixed(1)}</strong> hours (from monthly report)</p>
+            <p style="color: #666; font-size: 0.9em;">System sized for the worst conditions to ensure year-round reliability</p>`;
+    } else {
+        html += `<p>Current day sunlight: <strong>${results.actualSunHours.toFixed(1)}</strong> hours</p>
+            <p style="color: #f57c00; font-size: 0.9em;">Generate a monthly report for worst-case sizing</p>`;
+    }
+    
+    // Show topographic analysis if available
+    if (results.occlusionLoss > 0.01) {
+        html += `
+            <p>Theoretical daylight: <strong>${results.theoreticalSunHours.toFixed(1)}</strong> hours</p>
+            <p>Current day actual sunlight: <strong>${results.actualSunHours.toFixed(1)}</strong> hours</p>
+            <p>Terrain shadowing loss: <strong>${results.occlusionLoss.toFixed(1)}</strong> hours/day (${((results.occlusionLoss / results.theoreticalSunHours) * 100).toFixed(0)}%)</p>
+            <p>Sunrise: <strong>${results.sunriseTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })}</strong></p>
+            <p>Sunset: <strong>${results.sunsetTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })}</strong></p>
+        `;
+    }
+    
+    html += `
+            <p>Cloud cover: <strong>${results.cloudCoverPercent}%</strong> (${results.cloudCoverSource === 'real-time' ? '🌐 Real-time' : '📊 Climatological'}) (Clear sky factor: ${(results.cloudCoverFactor * 100).toFixed(0)}%)</p>
+            <p>Effective sun hours (accounting for ${results.worstDaySunHours !== null ? 'worst day & clouds' : 'terrain & clouds'}): <strong>${results.effectiveSunHours.toFixed(1)}</strong> hours</p>
+            <p>Target daily energy: <strong>${results.targetEnergy.toFixed(2)}</strong> kWh</p>
+            <p>Sunlight trend: <strong>${results.sunlightTrend}</strong></p>
+        </div>
+    `;
+    
+    for (const [key, rec] of Object.entries(results.recommendations)) {
+        html += `
+            <div class="solar-recommendation">
+                <h4>${rec.description}</h4>
+                <div class="solar-recommendation-item">
+                    Solar Panel Capacity: <strong>${rec.panelSize.toFixed(2)} kW</strong>
+                    <br><small>(${(rec.panelSize * 1000).toFixed(0)} watts)</small>
+                </div>
+                <div class="solar-recommendation-item">
+                    Battery Storage: <strong>${rec.battery.toFixed(2)} kWh</strong>
+                    <br><small>(Approx ${(rec.battery / 12).toFixed(1)} × 12kWh batteries)</small>
+                </div>
+            </div>
+        `;
+    }
+    
+    html += `
+        <div style="margin-top: 15px; padding: 10px; background-color: #fff3cd; border-radius: 5px; font-size: 12px;">
+            <strong>Note:</strong> These estimates account for:
+            <ul style="margin: 5px 0;">
+                <li>🏔️ Terrain occlusion (local topography blocking sunlight)</li>
+                <li>☁️ Cloud cover (climatological data for your location and month)</li>
+                <li>📅 Worst-case day sunlight (from annual report for reliability)</li>
+                <li>Panel orientation and tilt angle (not yet optimized)</li>
+            </ul>
+        </div>
+    `;
+    
+    document.getElementById('solar-results').innerHTML = html;
+}
 
 window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
@@ -1514,13 +1788,21 @@ const toggleReportBtn = document.getElementById('toggle-report-btn');
 const generateReportBtn = document.getElementById('generate-report-btn');
 const reportTableContainer = document.getElementById('report-table-container');
 
+// Store worst day sunlight hours for solar calculations
+let worstDaySunlightHours = null;
+
 toggleReportBtn.addEventListener('click', () => {
     reportPanel.classList.toggle('collapsed');
 });
 
-generateReportBtn.addEventListener('click', async () => {
-    reportPanel.style.display = 'block';
-    reportPanel.classList.remove('collapsed');
+// Extract report generation logic into reusable function
+async function generateMonthlyReport(showUI = true) {
+    console.log('Starting report generation with showUI:', showUI);
+    
+    if (showUI) {
+        reportPanel.style.display = 'block';
+        reportPanel.classList.remove('collapsed');
+    }
 
     const loader = document.getElementById('loader');
     const loaderText = document.getElementById('loader-text');
@@ -1528,7 +1810,7 @@ generateReportBtn.addEventListener('click', async () => {
 
     loaderText.textContent = 'Creating report...';
     progressBar.style.width = '0%';
-    loader.style.display = 'block';
+    if (showUI) loader.style.display = 'block';
 
     // Yield to the event loop to allow the loader to render before heavy computation.
     await new Promise(resolve => setTimeout(resolve, 0));
@@ -1556,11 +1838,25 @@ generateReportBtn.addEventListener('click', async () => {
         const date = dates[i];
         const data = await getReportDataForDate(date);
         reportData.push(data);
-        progressBar.style.width = `${((i + 2) / (dates.length + 2)) * 100}%`;
+        if (showUI) progressBar.style.width = `${((i + 2) / (dates.length + 2)) * 100}%`;
     }
 
-    renderReportTable(reportData);
-    loader.style.display = 'none';
+    console.log('Report data collected, length:', reportData.length);
+    console.log('First few entries:', reportData.slice(0, 3));
+    
+    // Calculate worst day sunlight hours from report data
+    calculateWorstDaySunlight(reportData);
+    
+    if (showUI) {
+        renderReportTable(reportData);
+        loader.style.display = 'none';
+    }
+    
+    return reportData;
+}
+
+generateReportBtn.addEventListener('click', async () => {
+    await generateMonthlyReport(true);
 });
 
 function formatTimeDiff(ms) {
@@ -1596,6 +1892,9 @@ async function getReportDataForDate(date, customLabel) {
 
     const dateString = customLabel ? `${customLabel} (${fullDateString})` : fullDateString;
 
+    // Fetch cloud cover data
+    const cloudCover = await getAverageCloudCover(date.getMonth() + 1);
+
     return {
         date: dateString,
         astroSunrise: times.sunrise,
@@ -1604,8 +1903,142 @@ async function getReportDataForDate(date, customLabel) {
         astroSunset: times.sunset,
         topoSunset: topoSunset,
         sunsetLoss: formatDuration(sunsetLossMs),
-        totalLoss: formatDuration(totalLossMs)
+        totalLoss: formatDuration(totalLossMs),
+        cloudCover: cloudCover
     };
+}
+
+let cloudCoverCache = {};
+
+// Calculate the worst day (minimum sunlight hours) from report data
+function calculateWorstDaySunlight(reportData) {
+    console.log('calculateWorstDaySunlight called with', reportData.length, 'data points');
+    let minSunlightHours = Infinity;
+    let validDayCount = 0;
+    const dayDetails = [];
+    
+    for (const data of reportData) {
+        console.log('Checking data entry:', data.date, 'sunrise:', data.topoSunrise, 'sunset:', data.topoSunset);
+        
+        // Check if topoSunrise and topoSunset are valid Date objects
+        if (data.topoSunrise instanceof Date && data.topoSunset instanceof Date && 
+            !isNaN(data.topoSunrise.getTime()) && !isNaN(data.topoSunset.getTime())) {
+            const sunriseHour = data.topoSunrise.getHours() + data.topoSunrise.getMinutes() / 60;
+            let sunsetHour = data.topoSunset.getHours() + data.topoSunset.getMinutes() / 60;
+            
+            // If sunset is on a different day than sunrise, add 24 hours
+            if (data.topoSunset.getDate() !== data.topoSunrise.getDate()) {
+                sunsetHour += 24;
+            }
+            
+            const sunlightHours = Math.max(0, sunsetHour - sunriseHour);
+            
+            dayDetails.push({
+                date: data.date,
+                hours: sunlightHours,
+                sunrise: data.topoSunrise.toLocaleTimeString(),
+                sunset: data.topoSunset.toLocaleTimeString(),
+                sunriseHour: sunriseHour.toFixed(2),
+                sunsetHour: sunsetHour.toFixed(2)
+            });
+            
+            validDayCount++;
+            if (sunlightHours < minSunlightHours) {
+                minSunlightHours = sunlightHours;
+            }
+        }
+    }
+    
+    console.log(`Worst day calculation: ${validDayCount} valid days analyzed`);
+    console.log('Day details:', dayDetails);
+    console.log(`Worst day: ${minSunlightHours === Infinity ? 'N/A' : minSunlightHours.toFixed(1)} hours`);
+    worstDaySunlightHours = minSunlightHours === Infinity ? null : minSunlightHours;
+    console.log('worstDaySunlightHours global set to:', worstDaySunlightHours);
+}
+
+// Typical cloud cover percentages by latitude zone and month
+function getTypicalCloudCover(latitude, month) {
+    // Determine climate zone based on latitude
+    const absLat = Math.abs(latitude);
+    let cloudByMonth;
+    
+    if (absLat < 10) {
+        // Tropical (0-10°)
+        cloudByMonth = [75, 73, 70, 68, 72, 80, 85, 85, 82, 78, 75, 76];
+    } else if (absLat < 23.5) {
+        // Subtropical (10-23.5°)
+        cloudByMonth = [65, 62, 58, 55, 58, 65, 70, 72, 68, 62, 60, 65];
+    } else if (absLat < 35) {
+        // Warm temperate (23.5-35°)
+        cloudByMonth = [58, 55, 50, 48, 50, 55, 60, 60, 55, 52, 55, 60];
+    } else if (absLat < 45) {
+        // Temperate (35-45°) - Melbourne is around -37.8°
+        cloudByMonth = [55, 52, 48, 45, 48, 52, 55, 55, 52, 55, 58, 60];
+    } else if (absLat < 60) {
+        // Cold temperate (45-60°)
+        cloudByMonth = [60, 58, 55, 52, 52, 55, 58, 58, 58, 62, 65, 68];
+    } else {
+        // Polar (60°+)
+        cloudByMonth = [70, 68, 65, 60, 58, 60, 65, 68, 70, 72, 75, 75];
+    }
+    
+    return cloudByMonth[month - 1];
+}
+
+async function getAverageCloudCover(month) {
+    try {
+        // Check cache first
+        const cacheKey = `${currentLocation.lat.toFixed(2)}_${currentLocation.lon.toFixed(2)}_${month}`;
+        if (cloudCoverCache[cacheKey]) {
+            return cloudCoverCache[cacheKey];
+        }
+
+        // Try to fetch real cloud cover data from Open-Meteo API (free, no API key required)
+        let cloudCover = null;
+        let dataSource = 'climatological';
+        
+        try {
+            const lat = currentLocation.lat;
+            const lon = currentLocation.lon;
+            
+            // Open-Meteo API - free with no key required
+            // Fetch current weather data
+            const response = await fetch(
+                `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=cloudcover&timezone=auto`
+            );
+            
+            if (response.ok) {
+                const data = await response.json();
+                if (data.current && data.current.cloudcover !== undefined) {
+                    // Current cloud cover might not be representative, so blend with climatological
+                    const currentClouds = data.current.cloudcover;
+                    const climateClouds = getTypicalCloudCover(lat, month);
+                    // Weight: 30% current, 70% climatological for better estimate
+                    cloudCover = Math.round(currentClouds * 0.3 + climateClouds * 0.7);
+                    dataSource = 'real-time';
+                    console.log(`Cloud cover for ${currentLocation.name || 'selected location'}: ${cloudCover}% (${dataSource} via Open-Meteo, blended with climatological)`);
+                }
+            }
+        } catch (apiError) {
+            console.log('Open-Meteo API unavailable, using climatological data:', apiError.message);
+        }
+        
+        // Fallback to climatological if API fails
+        if (cloudCover === null) {
+            cloudCover = getTypicalCloudCover(currentLocation.lat, month);
+            dataSource = 'climatological';
+        }
+        
+        const result = `${cloudCover}%|${dataSource}`;
+        
+        // Cache the result
+        cloudCoverCache[cacheKey] = result;
+        
+        return result;
+    } catch (error) {
+        console.error('Error calculating cloud cover data:', error);
+        return 'N/A|error';
+    }
 }
 
 function renderReportTable(data) {
@@ -1614,6 +2047,7 @@ function renderReportTable(data) {
         '<th>Astro Sunrise</th><th>Topo Sunrise</th><th>Sunrise Loss</th>' +
         '<th>Astro Sunset</th><th>Topo Sunset</th><th>Sunset Loss</th>' +
         '<th>Total Loss</th>' +
+        '<th>Avg Cloud Cover</th>' +
         '</tr></thead><tbody>';
     data.forEach(row => {
         tableHTML += `<tr>
@@ -1625,6 +2059,7 @@ function renderReportTable(data) {
                     <td>${formatTime(row.topoSunset, selectedTimezone)} <span class="time-jump" data-time="${row.topoSunset.getTime()}">🕰️</span></td>
                     <td>${row.sunsetLoss}</td>
                     <td>${row.totalLoss}</td>
+                    <td>${row.cloudCover}</td>
                 </tr>`;
     });
     tableHTML += '</tbody></table>';

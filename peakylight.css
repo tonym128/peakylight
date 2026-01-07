@@ -409,3 +409,94 @@ body, html {
         padding: 0; /* Override padding */
     }
 }
+
+/* Solar Panel Styles */
+#solar-panel {
+    display: none;
+    position: absolute;
+    bottom: 100px;
+    right: 20px;
+    background: rgba(255, 255, 255, 0.95);
+    padding: 20px;
+    border-radius: 10px;
+    z-index: 2;
+    color: #424242;
+    max-width: 400px;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.15);
+    max-height: calc(100vh - 140px);
+    overflow-y: auto;
+    transition: all 0.3s ease-in-out;
+    border: 1px solid rgba(0,0,0,0.1);
+}
+
+#solar-panel h2 {
+    margin: 0 0 15px 0;
+    font-size: 18px;
+}
+
+.solar-input-group {
+    margin-bottom: 15px;
+}
+
+.solar-input-group label {
+    display: block;
+    margin-bottom: 5px;
+    font-weight: 600;
+    font-size: 14px;
+}
+
+.solar-input-group input {
+    width: 100%;
+    padding: 8px;
+    border: 1px solid #ccc;
+    border-radius: 5px;
+    font-size: 14px;
+    box-sizing: border-box;
+}
+
+#calculate-solar-btn {
+    width: 100%;
+    padding: 10px;
+    background-color: #4CAF50;
+    color: white;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-weight: 600;
+    transition: background-color 0.3s;
+}
+
+#calculate-solar-btn:hover {
+    background-color: #45a049;
+}
+
+#solar-results {
+    padding: 15px;
+    background-color: #f9f9f9;
+    border-radius: 5px;
+    border-left: 4px solid #4CAF50;
+}
+
+.solar-recommendation {
+    margin-bottom: 20px;
+    padding: 15px;
+    background-color: white;
+    border-radius: 5px;
+    border: 1px solid #ddd;
+}
+
+.solar-recommendation h4 {
+    margin: 0 0 10px 0;
+    color: #2c3e50;
+    font-size: 16px;
+}
+
+.solar-recommendation-item {
+    margin: 8px 0;
+    font-size: 14px;
+    line-height: 1.6;
+}
+
+.solar-recommendation-item strong {
+    color: #4CAF50;
+}
