@@ -354,6 +354,8 @@ async function updateTerrain() {
     try {
         await Promise.all(promises);
 
+        synchronizeTileBoundaries(gridRadius);
+
         const centralMesh = terrainGrid.getObjectByName('tile_0_0');
         const centerIndex = Math.floor(offsetY * 255) * 256 + Math.floor(offsetX * 255);
         const centralHeight = centralMesh.geometry.attributes.position.getZ(centerIndex);
@@ -1313,6 +1315,7 @@ function switchMapLayer(layerKey) {
 
 function updateAll() {
     terrainHeightData = {}; // Clear height data on location change
+    lastTerrainLocation = { lat: null, lon: null }; // Force terrain reload even if location hasn't changed
 
     // Invalidate cache if location changed
     if (topoTimesCache.lat !== currentLocation.lat || topoTimesCache.lon !== currentLocation.lon) {
@@ -1326,6 +1329,183 @@ function updateAll() {
     updateInfoDisplay();
     updateTerrain();
     updateUrlWithState();
+}
+
+function synchronizeTileBoundaries(gridRadius) {
+    // Synchronize height values at tile edges to ensure seamless connections
+    const gridSize = 256; // Each heightmap is 256x256 vertices
+
+    for (let i = -gridRadius; i <= gridRadius; i++) {
+        for (let j = -gridRadius; j <= gridRadius; j++) {
+            const tileName = `tile_${i}_${j}`;
+            const tile = terrainGrid.getObjectByName(tileName);
+            if (!tile) continue;
+
+            const vertices = tile.geometry.attributes.position;
+            const geometry = tile.geometry;
+            const { topVerticesCount, edgeToSkirtMap, skirtDepth } = geometry.userData;
+            let needsUpdate = false;
+
+            // Synchronize with right neighbor (positive X direction)
+            if (j < gridRadius) {
+                const rightTileName = `tile_${i}_${j + 1}`;
+                const rightTile = terrainGrid.getObjectByName(rightTileName);
+                if (rightTile) {
+                    const rightVertices = rightTile.geometry.attributes.position;
+                    // Average the heights at the boundary
+                    for (let iy = 0; iy < gridSize; iy++) {
+                        const thisEdgeIndex = iy * gridSize + (gridSize - 1); // Right edge of this tile
+                        const rightEdgeIndex = iy * gridSize; // Left edge of right tile
+
+                        const thisHeight = vertices.getZ(thisEdgeIndex);
+                        const rightHeight = rightVertices.getZ(rightEdgeIndex);
+                        const avgHeight = (thisHeight + rightHeight) / 2;
+
+                        vertices.setZ(thisEdgeIndex, avgHeight);
+                        rightVertices.setZ(rightEdgeIndex, avgHeight);
+
+                        // Update skirt vertices
+                        if (edgeToSkirtMap && edgeToSkirtMap.has(thisEdgeIndex)) {
+                            const skirtIndex = edgeToSkirtMap.get(thisEdgeIndex);
+                            vertices.setZ(topVerticesCount + skirtIndex, avgHeight - skirtDepth);
+                        }
+                    }
+                    rightVertices.needsUpdate = true;
+                    needsUpdate = true;
+                }
+            }
+
+            // Synchronize with bottom neighbor (positive Z direction)
+            if (i < gridRadius) {
+                const bottomTileName = `tile_${i + 1}_${j}`;
+                const bottomTile = terrainGrid.getObjectByName(bottomTileName);
+                if (bottomTile) {
+                    const bottomVertices = bottomTile.geometry.attributes.position;
+                    // Average the heights at the boundary
+                    for (let ix = 0; ix < gridSize; ix++) {
+                        const thisEdgeIndex = (gridSize - 1) * gridSize + ix; // Bottom edge of this tile
+                        const bottomEdgeIndex = ix; // Top edge of bottom tile
+
+                        const thisHeight = vertices.getZ(thisEdgeIndex);
+                        const bottomHeight = bottomVertices.getZ(bottomEdgeIndex);
+                        const avgHeight = (thisHeight + bottomHeight) / 2;
+
+                        vertices.setZ(thisEdgeIndex, avgHeight);
+                        bottomVertices.setZ(bottomEdgeIndex, avgHeight);
+
+                        // Update skirt vertices
+                        if (edgeToSkirtMap && edgeToSkirtMap.has(thisEdgeIndex)) {
+                            const skirtIndex = edgeToSkirtMap.get(thisEdgeIndex);
+                            vertices.setZ(topVerticesCount + skirtIndex, avgHeight - skirtDepth);
+                        }
+                    }
+                    bottomVertices.needsUpdate = true;
+                    needsUpdate = true;
+                }
+            }
+
+            if (needsUpdate) {
+                vertices.needsUpdate = true;
+                tile.geometry.computeVertexNormals();
+            }
+        }
+    }
+
+    // Stitch normals at tile boundaries for smooth lighting transitions
+    stitchTileNormals(gridRadius);
+}
+
+function stitchTileNormals(gridRadius) {
+    // Share averaged normal vectors at tile edges for seamless lighting
+    const gridSize = 256;
+    
+    for (let i = -gridRadius; i <= gridRadius; i++) {
+        for (let j = -gridRadius; j <= gridRadius; j++) {
+            const tileName = `tile_${i}_${j}`;
+            const tile = terrainGrid.getObjectByName(tileName);
+            if (!tile) continue;
+            
+            const normals = tile.geometry.attributes.normal;
+            const geometry = tile.geometry;
+            const { topVerticesCount } = geometry.userData;
+            
+            // Stitch with right neighbor
+            if (j < gridRadius) {
+                const rightTileName = `tile_${i}_${j + 1}`;
+                const rightTile = terrainGrid.getObjectByName(rightTileName);
+                if (rightTile) {
+                    const rightNormals = rightTile.geometry.attributes.normal;
+                    
+                    for (let iy = 0; iy < gridSize; iy++) {
+                        const thisEdgeIndex = iy * gridSize + (gridSize - 1); // Right edge
+                        const rightEdgeIndex = iy * gridSize; // Left edge of right tile
+                        
+                        // Average the normals
+                        const thisNx = normals.getX(thisEdgeIndex);
+                        const thisNy = normals.getY(thisEdgeIndex);
+                        const thisNz = normals.getZ(thisEdgeIndex);
+                        
+                        const rightNx = rightNormals.getX(rightEdgeIndex);
+                        const rightNy = rightNormals.getY(rightEdgeIndex);
+                        const rightNz = rightNormals.getZ(rightEdgeIndex);
+                        
+                        const avgNx = (thisNx + rightNx) / 2;
+                        const avgNy = (thisNy + rightNy) / 2;
+                        const avgNz = (thisNz + rightNz) / 2;
+                        
+                        const length = Math.sqrt(avgNx * avgNx + avgNy * avgNy + avgNz * avgNz);
+                        const normNx = avgNx / length;
+                        const normNy = avgNy / length;
+                        const normNz = avgNz / length;
+                        
+                        // Apply averaged normal to both tiles
+                        normals.setXYZ(thisEdgeIndex, normNx, normNy, normNz);
+                        rightNormals.setXYZ(rightEdgeIndex, normNx, normNy, normNz);
+                    }
+                    rightNormals.needsUpdate = true;
+                }
+            }
+            
+            // Stitch with bottom neighbor
+            if (i < gridRadius) {
+                const bottomTileName = `tile_${i + 1}_${j}`;
+                const bottomTile = terrainGrid.getObjectByName(bottomTileName);
+                if (bottomTile) {
+                    const bottomNormals = bottomTile.geometry.attributes.normal;
+                    
+                    for (let ix = 0; ix < gridSize; ix++) {
+                        const thisEdgeIndex = (gridSize - 1) * gridSize + ix; // Bottom edge
+                        const bottomEdgeIndex = ix; // Top edge of bottom tile
+                        
+                        // Average the normals
+                        const thisNx = normals.getX(thisEdgeIndex);
+                        const thisNy = normals.getY(thisEdgeIndex);
+                        const thisNz = normals.getZ(thisEdgeIndex);
+                        
+                        const bottomNx = bottomNormals.getX(bottomEdgeIndex);
+                        const bottomNy = bottomNormals.getY(bottomEdgeIndex);
+                        const bottomNz = bottomNormals.getZ(bottomEdgeIndex);
+                        
+                        const avgNx = (thisNx + bottomNx) / 2;
+                        const avgNy = (thisNy + bottomNy) / 2;
+                        const avgNz = (thisNz + bottomNz) / 2;
+                        
+                        const length = Math.sqrt(avgNx * avgNx + avgNy * avgNy + avgNz * avgNz);
+                        const normNx = avgNx / length;
+                        const normNy = avgNy / length;
+                        const normNz = avgNz / length;
+                        
+                        // Apply averaged normal to both tiles
+                        normals.setXYZ(thisEdgeIndex, normNx, normNy, normNz);
+                        bottomNormals.setXYZ(bottomEdgeIndex, normNx, normNy, normNz);
+                    }
+                    bottomNormals.needsUpdate = true;
+                }
+            }
+            
+            normals.needsUpdate = true;
+        }
+    }
 }
 
 // --- Report Generation ---
