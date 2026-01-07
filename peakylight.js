@@ -595,16 +595,25 @@ async function findTopoTime(startTime, endTime, findFirstLight) {
     let high = endTime.getTime();
     let bestTime = findFirstLight ? high : low;
 
-    for (let i = 0; i < 15; i++) {
+    for (let i = 0; i < 15; i++) { // 15 iterations for high precision
         const mid = low + (high - low) / 2;
         const { isLit } = isLocationSunlit(new Date(mid));
+
         if (findFirstLight) {
-            if (isLit) { bestTime = mid; high = mid; } else { low = mid; }
-        } else {
-            if (isLit) { bestTime = mid; low = mid; } else { high = mid; }
+            if (isLit) {
+                bestTime = mid;
+                high = mid;
+            } else {
+                low = mid;
+            }
+        } else { // findLastLight
+            if (isLit) {
+                bestTime = mid;
+                low = mid;
+            } else {
+                high = mid;
+            }
         }
-        // Yield to the event loop to prevent UI blocking during heavy calculation
-        await new Promise(resolve => setTimeout(resolve, 0));
     }
     return new Date(bestTime);
 }
