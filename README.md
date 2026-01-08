@@ -16,31 +16,35 @@ This project consists of static HTML files. To view them, you can open the `.htm
 
 You can view the website at https://tonym128.github.io/peakylight/ which would be the same as hosting this yourself.
 
-### Using Python's built-in server
+### Using a local static server (`serve`)
 
-If you have Python installed, you can run a simple web server from the project root directory:
+This project is static and is best served with a small static server during development. We recommend the Node.js `serve` package:
+
+1. Install `serve` globally (or as a dev dependency):
 
 ```bash
-python -m http.server 8000
+npm install -g serve
 ```
 
-Then, open your browser and navigate to `http://localhost:8000`.
+2. Run the server from the project root:
 
-### Using `serve` (Node.js)
+```bash
+serve
+```
 
-A more feature-rich option is to use the `serve` package.
+`serve` will print a URL to open in your browser (commonly `http://localhost:3000`). It handles correct MIME types and caching headers which makes it a better development experience than opening files directly.
 
-1.  Install `serve` globally (or as a dev dependency):
-    ```bash
-    npm install -g serve
-    ```
+You can run `serve` on a specific port (for example `8000`) like this:
 
-2.  Run the server from the project root:
-    ```bash
-    serve
-    ```
+```bash
+serve -l 8000
+```
 
-3.  It will give you a URL to open in your browser, typically `http://localhost:3000`.
+If you don't want to install `serve` globally, you can run it with `npx`:
+
+```bash
+npx serve -l 8000
+```
 
 ## How to Dev
 

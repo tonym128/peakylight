@@ -1908,7 +1908,7 @@ async function getReportDataForDate(date, customLabel) {
     };
 }
 
-let cloudCoverCache = {};
+// Cloud cover caching now persisted to IndexedDB via `dataManager.getKV` / `dataManager.saveKV`.
 
 // Calculate the worst day (minimum sunlight hours) from report data
 function calculateWorstDaySunlight(reportData) {
@@ -1987,30 +1987,32 @@ function getTypicalCloudCover(latitude, month) {
 
 async function getAverageCloudCover(month) {
     try {
-        // Check cache first
         const cacheKey = `${currentLocation.lat.toFixed(2)}_${currentLocation.lon.toFixed(2)}_${month}`;
-        if (cloudCoverCache[cacheKey]) {
-            return cloudCoverCache[cacheKey];
+
+        // Try IndexedDB cache first
+        try {
+            const cached = await dataManager.getKV(cacheKey);
+            if (cached) return cached;
+        } catch (e) {
+            console.warn('IndexedDB cache unavailable, falling back to in-memory behavior', e);
         }
 
         // Try to fetch real cloud cover data from Open-Meteo API (free, no API key required)
         let cloudCover = null;
         let dataSource = 'climatological';
-        
+
         try {
             const lat = currentLocation.lat;
             const lon = currentLocation.lon;
-            
+
             // Open-Meteo API - free with no key required
-            // Fetch current weather data
             const response = await fetch(
                 `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=cloudcover&timezone=auto`
             );
-            
+
             if (response.ok) {
                 const data = await response.json();
                 if (data.current && data.current.cloudcover !== undefined) {
-                    // Current cloud cover might not be representative, so blend with climatological
                     const currentClouds = data.current.cloudcover;
                     const climateClouds = getTypicalCloudCover(lat, month);
                     // Weight: 30% current, 70% climatological for better estimate
@@ -2022,18 +2024,22 @@ async function getAverageCloudCover(month) {
         } catch (apiError) {
             console.log('Open-Meteo API unavailable, using climatological data:', apiError.message);
         }
-        
+
         // Fallback to climatological if API fails
         if (cloudCover === null) {
             cloudCover = getTypicalCloudCover(currentLocation.lat, month);
             dataSource = 'climatological';
         }
-        
+
         const result = `${cloudCover}%|${dataSource}`;
-        
-        // Cache the result
-        cloudCoverCache[cacheKey] = result;
-        
+
+        // Persist to IndexedDB (fire-and-forget)
+        try {
+            dataManager.saveKV(cacheKey, result);
+        } catch (e) {
+            console.warn('Failed to persist cloud cover to IndexedDB', e);
+        }
+
         return result;
     } catch (error) {
         console.error('Error calculating cloud cover data:', error);
@@ -2050,6 +2056,12 @@ function renderReportTable(data) {
         '<th>Avg Cloud Cover</th>' +
         '</tr></thead><tbody>';
     data.forEach(row => {
+        // Remove source suffix (e.g. "|real-time") for the monthly table display
+        let cloudCoverDisplay = row.cloudCover;
+        if (typeof cloudCoverDisplay === 'string' && cloudCoverDisplay.includes('|')) {
+            cloudCoverDisplay = cloudCoverDisplay.split('|')[0];
+        }
+
         tableHTML += `<tr>
                     <td>${row.date}</td>
                     <td>${formatTime(row.astroSunrise, selectedTimezone)} <span class="time-jump" data-time="${row.astroSunrise.getTime()}">🕰️</span></td>
@@ -2059,7 +2071,7 @@ function renderReportTable(data) {
                     <td>${formatTime(row.topoSunset, selectedTimezone)} <span class="time-jump" data-time="${row.topoSunset.getTime()}">🕰️</span></td>
                     <td>${row.sunsetLoss}</td>
                     <td>${row.totalLoss}</td>
-                    <td>${row.cloudCover}</td>
+                    <td>${cloudCoverDisplay}</td>
                 </tr>`;
     });
     tableHTML += '</tbody></table>';
