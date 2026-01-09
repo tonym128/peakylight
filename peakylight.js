@@ -2526,6 +2526,7 @@ function populateTimezones() {
 let lastCloudMonth = -1;
 let lastCloudLat = null;
 let lastCloudLon = null;
+let lastCloudPercentage = 50;
 
 async function updateSceneCloudCover(forceUpdate = false) {
     if (!cloudMaterial) return;
@@ -2533,54 +2534,51 @@ async function updateSceneCloudCover(forceUpdate = false) {
     // Get cloud cover for current month/location
     const month = selectedDate.getMonth() + 1;
 
-    // Optimization: Don't re-fetch if month and location haven't changed
-    if (!forceUpdate &&
-        month === lastCloudMonth && 
-        currentLocation.lat === lastCloudLat && 
-        currentLocation.lon === lastCloudLon) {
-        return;
+    // Fetch if needed
+    if (forceUpdate ||
+        month !== lastCloudMonth || 
+        currentLocation.lat !== lastCloudLat || 
+        currentLocation.lon !== lastCloudLon) {
+        
+        const cloudDisplay = document.getElementById('cloud-cover-display');
+        if (cloudDisplay) {
+            cloudDisplay.textContent = "Calculating...";
+        }
+
+        const cloudResult = await getAverageCloudCover(month);
+        
+        // Parse result "50%|source"
+        if (cloudResult && typeof cloudResult === 'string') {
+            const parts = cloudResult.split('%');
+            if (parts.length > 0) {
+                 const val = parseInt(parts[0]);
+                 if (!isNaN(val)) lastCloudPercentage = val;
+            }
+        }
+        
+        // Update uniform
+        cloudMaterial.uniforms.uCloudCover.value = lastCloudPercentage / 100.0;
+
+        lastCloudMonth = month;
+        lastCloudLat = currentLocation.lat;
+        lastCloudLon = currentLocation.lon;
     }
 
+    // Update display (always run this part to ensure solar estimate uses fresh topo times)
     const cloudDisplay = document.getElementById('cloud-cover-display');
     if (cloudDisplay) {
-        cloudDisplay.textContent = "Calculating...";
-    }
-
-    const cloudResult = await getAverageCloudCover(month);
-    
-    // Parse result "50%|source"
-    let percentage = 50;
-    if (cloudResult && typeof cloudResult === 'string') {
-        const parts = cloudResult.split('%');
-        if (parts.length > 0) {
-             const val = parseInt(parts[0]);
-             if (!isNaN(val)) percentage = val;
-        }
-    }
-    
-    // Update uniform
-    cloudMaterial.uniforms.uCloudCover.value = percentage / 100.0;
-
-    // Update display
-    if (cloudDisplay) {
-        cloudDisplay.textContent = cloudResult.split('|')[0];
+        cloudDisplay.textContent = `${lastCloudPercentage}%`;
     }
 
     // Calculate and display 1kW Solar Gen Estimate
     const solarGenDisplay = document.getElementById('solar-gen-estimate');
     if (solarGenDisplay && currentSunTimes.topoSunrise && currentSunTimes.topoSunset) {
         const topoHours = (currentSunTimes.topoSunset.getTime() - currentSunTimes.topoSunrise.getTime()) / (1000 * 60 * 60);
-        const cloudFraction = percentage / 100.0;
+        const cloudFraction = lastCloudPercentage / 100.0;
         // Simple estimate: TopoHours * (1 - CloudFraction) * 1kW. 
-        // Real systems have efficiency losses, but "estimate" usually implies "effective sun hours".
-        // Let's stick to Effective Sun Hours equivalent for 1kW.
         const estKwh = Math.max(0, topoHours * (1.0 - cloudFraction)); 
         solarGenDisplay.textContent = `${estKwh.toFixed(2)} kWh`;
     }
-
-    lastCloudMonth = month;
-    lastCloudLat = currentLocation.lat;
-    lastCloudLon = currentLocation.lon;
 }
 
 const cloudToggle = document.getElementById('cloud-cover-toggle');
