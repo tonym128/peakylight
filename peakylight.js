@@ -883,6 +883,9 @@ async function calculateTopoTimes() {
     const sunsetLossMs = (topoSunset && times.sunset && !isNaN(topoSunset) && !isNaN(times.sunset)) ? times.sunset.getTime() - topoSunset.getTime() : 0;
     const totalLossMs = Math.max(0, sunriseLossMs) + Math.max(0, sunsetLossMs);
 
+    const astroTotalMs = (times.sunset && times.sunrise) ? times.sunset.getTime() - times.sunrise.getTime() : 0;
+    const topoTotalMs = (topoSunset && topoSunrise) ? topoSunset.getTime() - topoSunrise.getTime() : 0;
+
     document.getElementById('topo-sunrise-time').textContent = formatTime(topoSunrise, selectedTimezone);
     document.getElementById('topo-sunset-time').textContent = formatTime(topoSunset, selectedTimezone);
     document.getElementById('jump-to-topo-sunrise').style.visibility = 'visible';
@@ -891,6 +894,11 @@ async function calculateTopoTimes() {
     document.getElementById('sunrise-loss').textContent = formatDuration(sunriseLossMs);
     document.getElementById('sunset-loss').textContent = formatDuration(sunsetLossMs);
     document.getElementById('total-daylight-loss').textContent = formatDuration(totalLossMs);
+    document.getElementById('astro-total-daylight').textContent = formatDuration(astroTotalMs);
+    document.getElementById('topo-total-daylight').textContent = formatDuration(topoTotalMs);
+
+    // Trigger update for solar estimate if cloud cover is already there
+    updateSceneCloudCover();
 
     updateSunArc(times, topoSunrise, topoSunset);
     updateDaylightDiagram(times, topoSunrise, topoSunset);
@@ -1215,13 +1223,33 @@ async function exportSplitScreenVideo() {
                 : 0;
             const totalLostMs = sunriseDiffMs + sunsetDiffMs;
 
+            const astroTotalMs = (astronomicalTimes.sunset && astronomicalTimes.sunrise) ? astronomicalTimes.sunset.getTime() - astronomicalTimes.sunrise.getTime() : 0;
+            const topoTotalMs = (cachedTimes.topoSunset && cachedTimes.topoSunrise) ? cachedTimes.topoSunset.getTime() - cachedTimes.topoSunrise.getTime() : 0;
+
+            // Cloud and Solar
+            // We need cloud cover for this specific month (day -> month)
+            // cachedTimes.topoSunrise is a Date object
+            const currentMonth = cachedTimes.topoSunrise.getMonth() + 1;
+            // Since we pre-cached, this should be fast
+            // We can't await inside this sync block easily, but getAverageCloudCover returns a promise.
+            // However, we pre-cached it. But getAverageCloudCover is async.
+            // We need to resolve it. Wait, renderFrame is async now!
+            const cloudCoverStr = await getAverageCloudCover(currentMonth);
+            let cloudPercentage = 50;
+            if (typeof cloudCoverStr === 'string') {
+                const parts = cloudCoverStr.split('%');
+                if (parts.length > 0) cloudPercentage = parseInt(parts[0]) || 0;
+            }
+            const solarGenEst = (topoTotalMs / (1000 * 60 * 60)) * (1.0 - cloudPercentage / 100.0);
+
+
             tempCtx.drawImage(renderer.domElement, 0, 0);
             const locationText = `Location: ${currentLocation.lat.toFixed(4)}, ${currentLocation.lon.toFixed(4)}`;
             const font = `18px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif`;
             const sunriseDate = cachedTimes.topoSunrise, sunsetDate = cachedTimes.topoSunset;
 
             // Left Panel
-            const panelX = 10, panelY = 10, panelW = 420, panelH = 200;
+            const panelX = 10, panelY = 10, panelW = 420, panelH = 300; // Increased height
             const textX = panelX + 15, textY = panelY + 15;
             tempCtx.fillStyle = 'rgba(0, 0, 0, 0.6)'; tempCtx.fillRect(panelX, panelY, panelW, panelH);
             tempCtx.fillStyle = '#f0f0f0'; tempCtx.font = font; tempCtx.textAlign = 'left';
@@ -1233,6 +1261,10 @@ async function exportSplitScreenVideo() {
             tempCtx.fillText(`Astro Sunrise: ${formatTime(astronomicalTimes.sunrise, selectedTimezone)}`, textX, y += 25);
             tempCtx.fillText(`Sunrise Diff : ${formatTimeDiff(sunriseDiffMs)}`, textX, y += 25);
             tempCtx.fillText(`Total Lost   : ${formatTimeDiff(totalLostMs)}`, textX, y += 25);
+            tempCtx.fillText(`Astro Total  : ${formatDuration(astroTotalMs)}`, textX, y += 25);
+            tempCtx.fillText(`Topo Total   : ${formatDuration(topoTotalMs)}`, textX, y += 25);
+            tempCtx.fillText(`Cloud Cover  : ${cloudPercentage}%`, textX, y += 25);
+            tempCtx.fillText(`1kW Solar Est: ${solarGenEst.toFixed(2)} kWh`, textX, y += 25);
 
             // Right Panel
             const rightPanelX = exportWidth / 2 + 10;
@@ -1247,6 +1279,10 @@ async function exportSplitScreenVideo() {
             tempCtx.fillText(`Astro Sunset: ${formatTime(astronomicalTimes.sunset, selectedTimezone)}`, rightTextX, y += 25);
             tempCtx.fillText(`Sunset Diff : ${formatTimeDiff(sunsetDiffMs)}`, rightTextX, y += 25);
             tempCtx.fillText(`Total Lost  : ${formatTimeDiff(totalLostMs)}`, rightTextX, y += 25);
+            tempCtx.fillText(`Astro Total : ${formatDuration(astroTotalMs)}`, rightTextX, y += 25);
+            tempCtx.fillText(`Topo Total  : ${formatDuration(topoTotalMs)}`, rightTextX, y += 25);
+            tempCtx.fillText(`Cloud Cover : ${cloudPercentage}%`, rightTextX, y += 25);
+            tempCtx.fillText(`1kW Solar Est: ${solarGenEst.toFixed(2)} kWh`, rightTextX, y += 25);
 
             tempCtx.fillStyle = '#f0f0f0'; tempCtx.fillRect(exportWidth / 2 - 1, 0, 2, exportHeight);
         }
@@ -2094,6 +2130,8 @@ async function getReportDataForDate(date, customLabel) {
     const sunriseLossMs = (topoSunrise && times.sunrise && !isNaN(topoSunrise) && !isNaN(times.sunrise)) ? topoSunrise.getTime() - times.sunrise.getTime() : 0;
     const sunsetLossMs = (times.sunset && topoSunset && !isNaN(times.sunset) && !isNaN(topoSunset)) ? times.sunset.getTime() - topoSunset.getTime() : 0;
     const totalLossMs = Math.max(0, sunriseLossMs) + Math.max(0, sunsetLossMs);
+    const astroTotalMs = (times.sunset && times.sunrise) ? times.sunset.getTime() - times.sunrise.getTime() : 0;
+    const topoTotalMs = (topoSunset && topoSunrise) ? topoSunset.getTime() - topoSunrise.getTime() : 0;
 
     const fullDateString = date.toLocaleString('default', { day: 'numeric', month: 'long', year: 'numeric' });
 
@@ -2101,6 +2139,14 @@ async function getReportDataForDate(date, customLabel) {
 
     // Fetch cloud cover data
     const cloudCover = await getAverageCloudCover(date.getMonth() + 1);
+    
+    let cloudPercentage = 50;
+    if (typeof cloudCover === 'string') {
+        const parts = cloudCover.split('%');
+        if (parts.length > 0) cloudPercentage = parseInt(parts[0]) || 0;
+    }
+    
+    const solarGenEst = (topoTotalMs / (1000 * 60 * 60)) * (1.0 - cloudPercentage / 100.0);
 
     return {
         date: dateString,
@@ -2111,7 +2157,10 @@ async function getReportDataForDate(date, customLabel) {
         topoSunset: topoSunset,
         sunsetLoss: formatDuration(sunsetLossMs),
         totalLoss: formatDuration(totalLossMs),
-        cloudCover: cloudCover
+        astroTotal: formatDuration(astroTotalMs),
+        topoTotal: formatDuration(topoTotalMs),
+        cloudCover: cloudCover,
+        solarGenEst: solarGenEst.toFixed(2) + ' kWh'
     };
 }
 
@@ -2259,8 +2308,8 @@ function renderReportTable(data) {
         '<th>Date</th>' +
         '<th>Astro Sunrise</th><th>Topo Sunrise</th><th>Sunrise Loss</th>' +
         '<th>Astro Sunset</th><th>Topo Sunset</th><th>Sunset Loss</th>' +
-        '<th>Total Loss</th>' +
-        '<th>Avg Cloud Cover</th>' +
+        '<th>Astro Total</th><th>Topo Total</th><th>Total Loss</th>' +
+        '<th>Avg Cloud Cover</th><th>1kW Solar Est</th>' +
         '</tr></thead><tbody>';
     data.forEach(row => {
         // Remove source suffix (e.g. "|real-time") for the monthly table display
@@ -2277,8 +2326,11 @@ function renderReportTable(data) {
                     <td>${formatTime(row.astroSunset, selectedTimezone)} <span class="time-jump" data-time="${row.astroSunset.getTime()}">🕰️</span></td>
                     <td>${formatTime(row.topoSunset, selectedTimezone)} <span class="time-jump" data-time="${row.topoSunset.getTime()}">🕰️</span></td>
                     <td>${row.sunsetLoss}</td>
+                    <td>${row.astroTotal}</td>
+                    <td>${row.topoTotal}</td>
                     <td>${row.totalLoss}</td>
                     <td>${cloudCoverDisplay}</td>
+                    <td>${row.solarGenEst}</td>
                 </tr>`;
     });
     tableHTML += '</tbody></table>';
@@ -2360,7 +2412,11 @@ async function exportReportAsPDF() {
             astroSunsetText: tr.cells[4].innerText.replace('🕰️', '').trim(),
             topoSunsetText: tr.cells[5].innerText.replace('🕰️', '').trim(),
             sunsetLoss: tr.cells[6].innerText,
-            totalLoss: tr.cells[7].innerText,
+            astroTotal: tr.cells[7].innerText,
+            topoTotal: tr.cells[8].innerText,
+            totalLoss: tr.cells[9].innerText,
+            cloudCover: tr.cells[10].innerText,
+            solarEst: tr.cells[11].innerText,
             // For images
             topoSunriseDate: new Date(parseInt(jumps[1].dataset.time)),
             topoSunsetDate: new Date(parseInt(jumps[3].dataset.time)),
@@ -2379,7 +2435,11 @@ async function exportReportAsPDF() {
             ['Astro Sunset', data.astroSunsetText],
             ['Topo Sunset', data.topoSunsetText],
             ['Sunset Loss', data.sunsetLoss],
+            ['Astro Total', data.astroTotal],
+            ['Topo Total', data.topoTotal],
             ['Total Daylight Lost', data.totalLoss],
+            ['Cloud Cover', data.cloudCover],
+            ['1kW Solar Est', data.solarEst]
         ];
 
         doc.autoTable({
@@ -2508,6 +2568,18 @@ async function updateSceneCloudCover(forceUpdate = false) {
     // Update display
     if (cloudDisplay) {
         cloudDisplay.textContent = cloudResult.split('|')[0];
+    }
+
+    // Calculate and display 1kW Solar Gen Estimate
+    const solarGenDisplay = document.getElementById('solar-gen-estimate');
+    if (solarGenDisplay && currentSunTimes.topoSunrise && currentSunTimes.topoSunset) {
+        const topoHours = (currentSunTimes.topoSunset.getTime() - currentSunTimes.topoSunrise.getTime()) / (1000 * 60 * 60);
+        const cloudFraction = percentage / 100.0;
+        // Simple estimate: TopoHours * (1 - CloudFraction) * 1kW. 
+        // Real systems have efficiency losses, but "estimate" usually implies "effective sun hours".
+        // Let's stick to Effective Sun Hours equivalent for 1kW.
+        const estKwh = Math.max(0, topoHours * (1.0 - cloudFraction)); 
+        solarGenDisplay.textContent = `${estKwh.toFixed(2)} kWh`;
     }
 
     lastCloudMonth = month;
