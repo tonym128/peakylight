@@ -149,9 +149,196 @@ const debouncedUpdateUrl = debounce(updateUrlWithState, 500);
 
 // --- 3D Scene Setup ---
 let terrainGrid, sunLight, locationMarker, sunRayLine, sunArcMesh;
+let cloudMesh, cloudMaterial; // Cloud visualization
 const raycaster = new THREE.Raycaster();
 const textureLoader = new THREE.TextureLoader();
 textureLoader.crossOrigin = 'anonymous';
+
+const cloudVertexShader = `
+varying vec3 vWorldPosition;
+varying vec3 vLocalPosition;
+void main() {
+    vLocalPosition = position;
+    vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+    vWorldPosition = worldPosition.xyz;
+    gl_Position = projectionMatrix * viewMatrix * worldPosition;
+}
+`;
+
+const cloudFragmentShader = `
+precision highp float;
+
+uniform float uTime;
+uniform float uCloudCover; // 0.0 to 1.0
+uniform vec3 uSunPosition;
+uniform vec3 uCloudColor;
+uniform vec3 uBoxMin;
+uniform vec3 uBoxMax;
+
+varying vec3 vWorldPosition;
+varying vec3 vLocalPosition;
+
+// --- Noise Functions ---
+// 3D Value Noise
+float hash(float n) { return fract(sin(n) * 753.5453123); }
+float noise(vec3 x) {
+    vec3 p = floor(x);
+    vec3 f = fract(x);
+    f = f * f * (3.0 - 2.0 * f);
+    float n = p.x + p.y * 157.0 + 113.0 * p.z;
+    return mix(mix(mix(hash(n + 0.0), hash(n + 1.0), f.x),
+                   mix(hash(n + 157.0), hash(n + 158.0), f.x), f.y),
+               mix(mix(hash(n + 113.0), hash(n + 114.0), f.x),
+                   mix(hash(n + 270.0), hash(n + 271.0), f.x), f.y), f.z);
+}
+
+// FBM
+float fbm(vec3 p) {
+    float f = 0.0;
+    float w = 0.5;
+    for (int i = 0; i < 4; i++) { 
+        f += w * noise(p);
+        p *= 2.02;
+        w *= 0.5;
+    }
+    return f;
+}
+
+// --- Raymarching ---
+vec2 rayBoxDst(vec3 boundsMin, vec3 boundsMax, vec3 rayOrigin, vec3 invRayDir) {
+    vec3 t0 = (boundsMin - rayOrigin) * invRayDir;
+    vec3 t1 = (boundsMax - rayOrigin) * invRayDir;
+    vec3 tmin = min(t0, t1);
+    vec3 tmax = max(t0, t1);
+    float dstA = max(max(tmin.x, tmin.y), tmin.z);
+    float dstB = min(min(tmax.x, tmax.y), tmax.z);
+    float dstToBox = max(0.0, dstA);
+    float dstInsideBox = max(0.0, dstB - dstToBox);
+    return vec2(dstToBox, dstInsideBox);
+}
+
+void main() {
+    vec3 ro = cameraPosition;
+    vec3 rd = normalize(vWorldPosition - ro);
+
+    // Calculate intersection with the cloud box
+    // Use a slightly smaller box for the volume than the mesh to avoid z-fighting at faces if camera is close
+    vec3 boundsMin = uBoxMin; 
+    vec3 boundsMax = uBoxMax;
+    
+    vec3 invRayDir = 1.0 / rd;
+    vec2 intersection = rayBoxDst(boundsMin, boundsMax, ro, invRayDir);
+    float dstToBox = intersection.x;
+    float dstInsideBox = intersection.y;
+
+    if (dstInsideBox <= 0.0) discard;
+
+    // Raymarch
+    float stepSize = 0.8; // Larger steps for performance
+    int numSteps = int(dstInsideBox / stepSize);
+    if (numSteps > 64) numSteps = 64; // Cap steps
+    
+    // Jitter start position to reduce banding
+    float jitter = hash(dot(gl_FragCoord.xy, vec2(12.9898,78.233))) * stepSize;
+    vec3 currentPos = ro + rd * (dstToBox + jitter);
+    
+    float density = 0.0;
+    float lightEnergy = 0.0;
+    float transmission = 1.0;
+    
+    vec3 sunDir = normalize(uSunPosition);
+    float cloudCoverThreshold = 1.1 - uCloudCover; // Map 0..1 to 1.1..0.1
+
+    for (int i = 0; i < 64; i++) {
+        if (i >= numSteps) break;
+        if (transmission < 0.01) break;
+
+        // Sampling
+        // Scale p for noise frequency. Move with time.
+        vec3 p = currentPos * 0.15;
+        p.x += uTime * 0.05;
+        p.z += uTime * 0.02;
+        
+        float densitySample = fbm(p);
+        
+        // Shape density: flatter at bottom/top
+        // Normalize height in box 0..1
+        float h = (currentPos.y - boundsMin.y) / (boundsMax.y - boundsMin.y);
+        densitySample *= smoothstep(0.0, 0.2, h) * smoothstep(1.0, 0.8, h);
+        
+        // Threshold
+        float d = max(0.0, densitySample - cloudCoverThreshold);
+        
+        if (d > 0.0) {
+            d *= 1.5; // Density multiplier
+            density += d * stepSize;
+            
+            // Simple lighting: directional derivative or just density check towards sun?
+            // Expensive to march towards sun. Use simple gradient approx.
+            float lightTransmittance = exp(-d * 2.0);
+            float luminance = 0.1 + lightTransmittance * 0.9; // Darker where dense
+            
+            // Accumulate
+            float absorbed = (1.0 - transmission) * d; // Beer's law approx
+            float tr = exp(-d * stepSize);
+            
+            // Integrate
+            lightEnergy += d * stepSize * transmission * luminance;
+            transmission *= tr;
+        }
+
+        currentPos += rd * stepSize;
+    }
+
+    if (lightEnergy <= 0.0) discard;
+
+    vec3 cloudColor = mix(vec3(0.8, 0.85, 0.9), vec3(1.0, 1.0, 1.0), lightEnergy);
+    float finalAlpha = 1.0 - transmission;
+    
+    // Fade out based on distance to hide hard clipping
+    // finalAlpha *= smoothstep(0.0, 10.0, dstInsideBox); 
+
+    gl_FragColor = vec4(cloudColor, finalAlpha);
+}
+`;
+
+function createCloudLayer() {
+    // Remove old cloud mesh if it exists
+    if (cloudMesh) {
+        scene.remove(cloudMesh);
+        if (cloudMesh.geometry) cloudMesh.geometry.dispose();
+        if (cloudMesh.material) cloudMesh.material.dispose();
+    }
+
+    const boxSize = 250;
+    const boxHeight = 15;
+    const geometry = new THREE.BoxGeometry(boxSize, boxHeight, boxSize);
+    
+    // Bounds in World Space
+    const centerY = 15;
+    const min = new THREE.Vector3(-boxSize/2, centerY - boxHeight/2, -boxSize/2);
+    const max = new THREE.Vector3(boxSize/2, centerY + boxHeight/2, boxSize/2);
+
+    cloudMaterial = new THREE.ShaderMaterial({
+        vertexShader: cloudVertexShader,
+        fragmentShader: cloudFragmentShader,
+        uniforms: {
+            uTime: { value: 0 },
+            uCloudCover: { value: 0.5 },
+            uSunPosition: { value: new THREE.Vector3(0, 1, 0) },
+            uCloudColor: { value: new THREE.Color(0xffffff) },
+            uBoxMin: { value: min },
+            uBoxMax: { value: max }
+        },
+        transparent: true,
+        side: THREE.BackSide, // Render back faces so we can see "into" the volume from outside
+        depthWrite: false
+    });
+
+    cloudMesh = new THREE.Mesh(geometry, cloudMaterial);
+    cloudMesh.position.set(0, centerY, 0); 
+    scene.add(cloudMesh);
+}
 
 function createSkirtedPlaneGeometry(width, height, widthSegments, heightSegments, skirtDepth) {
     const geometry = new THREE.BufferGeometry();
@@ -281,6 +468,8 @@ function setupScene() {
     sunLight.shadow.camera.bottom = -15;
     scene.add(sunLight);
     scene.add(sunLight.target);
+
+    createCloudLayer();
 
     camera.position.set(0, 8, 15);
     controls.update();
@@ -813,6 +1002,7 @@ function updateInfoDisplay() {
     document.getElementById('date-picker').value = `${parts.year}-${String(parts.month).padStart(2, '0')}-${String(parts.day).padStart(2, '0')}`;
 
     updateSliderIndicators();
+    updateSceneCloudCover();
 }
 
 
@@ -894,6 +1084,15 @@ async function exportSplitScreenVideo() {
     progressBar.style.width = '0%';
     loader.style.display = 'block';
 
+    // 1.5 Pre-cache cloud data
+    loaderText.textContent = `Caching cloud data...`;
+    for (let m = 1; m <= 12; m++) {
+        await getAverageCloudCover(m);
+        progressBar.style.width = `${(m / 12) * 100}%`;
+    }
+    loaderText.textContent = `Exporting split-screen video...`;
+    progressBar.style.width = '0%';
+
     // 2. Setup for export (canvas, dimensions, etc.)
     const exportWidth = 1920;
     const exportHeight = 1080;
@@ -969,7 +1168,7 @@ async function exportSplitScreenVideo() {
 
     recorder.start();
 
-    function renderFrame() {
+    async function renderFrame() {
         if (day > daysInYear) {
             recorder.stop();
             return;
@@ -994,6 +1193,7 @@ async function exportSplitScreenVideo() {
             renderer.setScissorTest(true);
             selectedDate = cachedTimes.topoSunrise;
             updateSunPosition();
+            await updateSceneCloudCover(true);
             updateSunArc(astronomicalTimes, cachedTimes.topoSunrise, cachedTimes.topoSunset);
             renderer.render(scene, camera);
 
@@ -1530,6 +1730,13 @@ function animate() {
     requestAnimationFrame(animate);
 
     controls.update();
+
+    if (cloudMaterial) {
+        cloudMaterial.uniforms.uTime.value += 0.01;
+        if (sunLight) {
+            cloudMaterial.uniforms.uSunPosition.value.copy(sunLight.position);
+        }
+    }
 
     // Prevent camera and target from going below ground during user navigation
     if (controls.enabled) {
@@ -2258,6 +2465,63 @@ function populateTimezones() {
         console.warn("Timezone listing not supported, hiding picker.", e);
         document.getElementById('timezone-picker').parentElement.style.display = 'none';
     }
+}
+
+let lastCloudMonth = -1;
+let lastCloudLat = null;
+let lastCloudLon = null;
+
+async function updateSceneCloudCover(forceUpdate = false) {
+    if (!cloudMaterial) return;
+    
+    // Get cloud cover for current month/location
+    const month = selectedDate.getMonth() + 1;
+
+    // Optimization: Don't re-fetch if month and location haven't changed
+    if (!forceUpdate &&
+        month === lastCloudMonth && 
+        currentLocation.lat === lastCloudLat && 
+        currentLocation.lon === lastCloudLon) {
+        return;
+    }
+
+    const cloudDisplay = document.getElementById('cloud-cover-display');
+    if (cloudDisplay) {
+        cloudDisplay.textContent = "Calculating...";
+    }
+
+    const cloudResult = await getAverageCloudCover(month);
+    
+    // Parse result "50%|source"
+    let percentage = 50;
+    if (cloudResult && typeof cloudResult === 'string') {
+        const parts = cloudResult.split('%');
+        if (parts.length > 0) {
+             const val = parseInt(parts[0]);
+             if (!isNaN(val)) percentage = val;
+        }
+    }
+    
+    // Update uniform
+    cloudMaterial.uniforms.uCloudCover.value = percentage / 100.0;
+
+    // Update display
+    if (cloudDisplay) {
+        cloudDisplay.textContent = cloudResult.split('|')[0];
+    }
+
+    lastCloudMonth = month;
+    lastCloudLat = currentLocation.lat;
+    lastCloudLon = currentLocation.lon;
+}
+
+const cloudToggle = document.getElementById('cloud-cover-toggle');
+if (cloudToggle) {
+    cloudToggle.addEventListener('change', (e) => {
+        if (cloudMesh) {
+            cloudMesh.visible = e.target.checked;
+        }
+    });
 }
 
 // --- Initialization ---

@@ -56,6 +56,12 @@
             </select>
         </div>
         <div class="control-group">
+            <label class="checkbox-label">
+                <input type="checkbox" id="cloud-cover-toggle" checked>
+                Show Cloud Cover
+            </label>
+        </div>
+        <div class="control-group">
             <label for="terrain-detail-picker">Terrain Detail:</label>
             <select id="terrain-detail-picker">
                 <option value="12">Low</option>
@@ -100,6 +106,7 @@
             <p><strong>Topo Sunset  :</strong> <span id="topo-sunset-time">N/A</span><span class="time-jump-icon" id="jump-to-topo-sunset" title="Jump to this time">🕰️</span></p>
             <p style="padding-left: 1em; font-style: italic;">└ Daylight Lost: <span id="sunset-loss">N/A</span></p>
             <p><strong>Total Daylight Lost:</strong> <span id="total-daylight-loss">N/A</span></p>
+            <p><strong>Cloud Cover       :</strong> <span id="cloud-cover-display">N/A</span></p>
         </div>
     </div>
     
