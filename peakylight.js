@@ -55,6 +55,7 @@ let topoTimesCache = {
 };
 let currentMapLayer = 'opentopo';
 let isYearAnimating = false;
+const cloudCoverInMemoryCache = {}; // In-memory cache for synchronous access
 
 function getStateFromUrl() {
     const params = new URLSearchParams(window.location.search);
@@ -1120,6 +1121,13 @@ async function exportSplitScreenVideo() {
     tempCanvas.height = exportHeight;
     const tempCtx = tempCanvas.getContext('2d');
 
+    // Double buffering: Render everything to stagingCanvas first, then copy to tempCanvas (recorded) in one go.
+    // This prevents the MediaRecorder from capturing partial frames (e.g. missing text).
+    const stagingCanvas = document.createElement('canvas');
+    stagingCanvas.width = exportWidth;
+    stagingCanvas.height = exportHeight;
+    const stagingCtx = stagingCanvas.getContext('2d');
+
     const mimeType = 'video/mp4';
     const isMp4Supported = MediaRecorder.isTypeSupported(mimeType);
     const finalMimeType = isMp4Supported ? mimeType : 'video/webm';
@@ -1174,9 +1182,13 @@ async function exportSplitScreenVideo() {
 
     recorder.start();
 
+    // Disable controls to prevent interference/judder during export
+    controls.enabled = false;
+
     async function renderFrame() {
         if (day > daysInYear) {
             recorder.stop();
+            controls.enabled = true; // Re-enable controls
             return;
         }
 
@@ -1188,8 +1200,7 @@ async function exportSplitScreenVideo() {
             const distance = 25;
             const height = 10;
             camera.position.set(distance * Math.sin(angle), height, distance * Math.cos(angle));
-            controls.target.set(0, 0, 0);
-            controls.update();
+            camera.lookAt(0, 0, 0); // Manually look at center instead of controls.update()
 
             const astronomicalTimes = { sunrise: cachedTimes.sunrise, sunset: cachedTimes.sunset };
 
@@ -1228,11 +1239,8 @@ async function exportSplitScreenVideo() {
             // We need cloud cover for this specific month (day -> month)
             // cachedTimes.topoSunrise is a Date object
             const currentMonth = cachedTimes.topoSunrise.getMonth() + 1;
-            // Since we pre-cached, this should be fast
-            // We can't await inside this sync block easily, but getAverageCloudCover returns a promise.
-            // However, we pre-cached it. But getAverageCloudCover is async.
-            // We need to resolve it. Wait, renderFrame is async now!
-            const cloudCoverStr = await getAverageCloudCover(currentMonth);
+            // Since we pre-cached, this should be fast and we can now use the sync version
+            const cloudCoverStr = getAverageCloudCoverSync(currentMonth);
             let cloudPercentage = 50;
             if (typeof cloudCoverStr === 'string') {
                 const parts = cloudCoverStr.split('%');
@@ -1241,7 +1249,7 @@ async function exportSplitScreenVideo() {
             const solarGenEst = (topoTotalMs / (1000 * 60 * 60)) * (1.0 - cloudPercentage / 100.0);
 
 
-            tempCtx.drawImage(renderer.domElement, 0, 0);
+            stagingCtx.drawImage(renderer.domElement, 0, 0);
             const locationText = `Location: ${currentLocation.lat.toFixed(4)}, ${currentLocation.lon.toFixed(4)}`;
             const font = `18px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif`;
             const sunriseDate = cachedTimes.topoSunrise, sunsetDate = cachedTimes.topoSunset;
@@ -1249,40 +1257,43 @@ async function exportSplitScreenVideo() {
             // Left Panel
             const panelX = 10, panelY = 10, panelW = 420, panelH = 300; // Increased height
             const textX = panelX + 15, textY = panelY + 15;
-            tempCtx.fillStyle = 'rgba(0, 0, 0, 0.6)'; tempCtx.fillRect(panelX, panelY, panelW, panelH);
-            tempCtx.fillStyle = '#f0f0f0'; tempCtx.font = font; tempCtx.textAlign = 'left';
+            stagingCtx.fillStyle = 'rgba(0, 0, 0, 0.6)'; stagingCtx.fillRect(panelX, panelY, panelW, panelH);
+            stagingCtx.fillStyle = '#f0f0f0'; stagingCtx.font = font; stagingCtx.textAlign = 'left';
             let y = textY;
-            tempCtx.fillText("Topographic Sunrise", textX, y += 20);
-            tempCtx.fillText(locationText, textX, y += 25);
-            tempCtx.fillText(`Date         : ${sunriseDate.toLocaleDateString([], { timeZone: selectedTimezone })}`, textX, y += 25);
-            tempCtx.fillText(`Topo Sunrise : ${sunriseDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: selectedTimezone })}`, textX, y += 25);
-            tempCtx.fillText(`Astro Sunrise: ${formatTime(astronomicalTimes.sunrise, selectedTimezone)}`, textX, y += 25);
-            tempCtx.fillText(`Sunrise Diff : ${formatTimeDiff(sunriseDiffMs)}`, textX, y += 25);
-            tempCtx.fillText(`Total Lost   : ${formatTimeDiff(totalLostMs)}`, textX, y += 25);
-            tempCtx.fillText(`Astro Total  : ${formatDuration(astroTotalMs)}`, textX, y += 25);
-            tempCtx.fillText(`Topo Total   : ${formatDuration(topoTotalMs)}`, textX, y += 25);
-            tempCtx.fillText(`Cloud Cover  : ${cloudPercentage}%`, textX, y += 25);
-            tempCtx.fillText(`1kW Solar Est: ${solarGenEst.toFixed(2)} kWh`, textX, y += 25);
+            stagingCtx.fillText("Topographic Sunrise", textX, y += 20);
+            stagingCtx.fillText(locationText, textX, y += 25);
+            stagingCtx.fillText(`Date         : ${sunriseDate.toLocaleDateString([], { timeZone: selectedTimezone })}`, textX, y += 25);
+            stagingCtx.fillText(`Topo Sunrise : ${sunriseDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: selectedTimezone })}`, textX, y += 25);
+            stagingCtx.fillText(`Astro Sunrise: ${formatTime(astronomicalTimes.sunrise, selectedTimezone)}`, textX, y += 25);
+            stagingCtx.fillText(`Sunrise Diff : ${formatTimeDiff(sunriseDiffMs)}`, textX, y += 25);
+            stagingCtx.fillText(`Total Lost   : ${formatTimeDiff(totalLostMs)}`, textX, y += 25);
+            stagingCtx.fillText(`Astro Total  : ${formatDuration(astroTotalMs)}`, textX, y += 25);
+            stagingCtx.fillText(`Topo Total   : ${formatDuration(topoTotalMs)}`, textX, y += 25);
+            stagingCtx.fillText(`Cloud Cover  : ${cloudPercentage}%`, textX, y += 25);
+            stagingCtx.fillText(`1kW Solar Est: ${solarGenEst.toFixed(2)} kWh`, textX, y += 25);
 
             // Right Panel
             const rightPanelX = exportWidth / 2 + 10;
             const rightTextX = rightPanelX + 15;
-            tempCtx.fillStyle = 'rgba(0, 0, 0, 0.6)'; tempCtx.fillRect(rightPanelX, panelY, panelW, panelH);
-            tempCtx.fillStyle = '#f0f0f0'; tempCtx.font = font; tempCtx.textAlign = 'left';
+            stagingCtx.fillStyle = 'rgba(0, 0, 0, 0.6)'; stagingCtx.fillRect(rightPanelX, panelY, panelW, panelH);
+            stagingCtx.fillStyle = '#f0f0f0'; stagingCtx.font = font; stagingCtx.textAlign = 'left';
             y = textY;
-            tempCtx.fillText("Topographic Sunset", rightTextX, y += 20);
-            tempCtx.fillText(locationText, rightTextX, y += 25);
-            tempCtx.fillText(`Date        : ${sunsetDate.toLocaleDateString([], { timeZone: selectedTimezone })}`, rightTextX, y += 25);
-            tempCtx.fillText(`Topo Sunset : ${sunsetDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: selectedTimezone })}`, rightTextX, y += 25);
-            tempCtx.fillText(`Astro Sunset: ${formatTime(astronomicalTimes.sunset, selectedTimezone)}`, rightTextX, y += 25);
-            tempCtx.fillText(`Sunset Diff : ${formatTimeDiff(sunsetDiffMs)}`, rightTextX, y += 25);
-            tempCtx.fillText(`Total Lost  : ${formatTimeDiff(totalLostMs)}`, rightTextX, y += 25);
-            tempCtx.fillText(`Astro Total : ${formatDuration(astroTotalMs)}`, rightTextX, y += 25);
-            tempCtx.fillText(`Topo Total  : ${formatDuration(topoTotalMs)}`, rightTextX, y += 25);
-            tempCtx.fillText(`Cloud Cover : ${cloudPercentage}%`, rightTextX, y += 25);
-            tempCtx.fillText(`1kW Solar Est: ${solarGenEst.toFixed(2)} kWh`, rightTextX, y += 25);
+            stagingCtx.fillText("Topographic Sunset", rightTextX, y += 20);
+            stagingCtx.fillText(locationText, rightTextX, y += 25);
+            stagingCtx.fillText(`Date        : ${sunsetDate.toLocaleDateString([], { timeZone: selectedTimezone })}`, rightTextX, y += 25);
+            stagingCtx.fillText(`Topo Sunset : ${sunsetDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: selectedTimezone })}`, rightTextX, y += 25);
+            stagingCtx.fillText(`Astro Sunset: ${formatTime(astronomicalTimes.sunset, selectedTimezone)}`, rightTextX, y += 25);
+            stagingCtx.fillText(`Sunset Diff : ${formatTimeDiff(sunsetDiffMs)}`, rightTextX, y += 25);
+            stagingCtx.fillText(`Total Lost  : ${formatTimeDiff(totalLostMs)}`, rightTextX, y += 25);
+            stagingCtx.fillText(`Astro Total : ${formatDuration(astroTotalMs)}`, rightTextX, y += 25);
+            stagingCtx.fillText(`Topo Total  : ${formatDuration(topoTotalMs)}`, rightTextX, y += 25);
+            stagingCtx.fillText(`Cloud Cover : ${cloudPercentage}%`, rightTextX, y += 25);
+            stagingCtx.fillText(`1kW Solar Est: ${solarGenEst.toFixed(2)} kWh`, rightTextX, y += 25);
 
-            tempCtx.fillStyle = '#f0f0f0'; tempCtx.fillRect(exportWidth / 2 - 1, 0, 2, exportHeight);
+            stagingCtx.fillStyle = '#f0f0f0'; stagingCtx.fillRect(exportWidth / 2 - 1, 0, 2, exportHeight);
+
+            // Transfer the completed frame from staging to the recorded canvas
+            tempCtx.drawImage(stagingCanvas, 0, 0);
         }
 
         currentFrame++; progressBar.style.width = `${(currentFrame / totalFrames) * 100}%`;
@@ -2241,10 +2252,18 @@ async function getAverageCloudCover(month) {
     try {
         const cacheKey = `${currentLocation.lat.toFixed(2)}_${currentLocation.lon.toFixed(2)}_${month}`;
 
-        // Try IndexedDB cache first
+        // Try in-memory cache first
+        if (cloudCoverInMemoryCache[cacheKey]) {
+            return cloudCoverInMemoryCache[cacheKey];
+        }
+
+        // Try IndexedDB cache second
         try {
             const cached = await dataManager.getKV(cacheKey);
-            if (cached) return cached;
+            if (cached) {
+                cloudCoverInMemoryCache[cacheKey] = cached;
+                return cached;
+            }
         } catch (e) {
             console.warn('IndexedDB cache unavailable, falling back to in-memory behavior', e);
         }
@@ -2284,6 +2303,7 @@ async function getAverageCloudCover(month) {
         }
 
         const result = `${cloudCover}%|${dataSource}`;
+        cloudCoverInMemoryCache[cacheKey] = result;
 
         // Persist to IndexedDB (fire-and-forget)
         try {
@@ -2297,6 +2317,20 @@ async function getAverageCloudCover(month) {
         console.error('Error calculating cloud cover data:', error);
         return 'N/A|error';
     }
+}
+
+/**
+ * Synchronous version of getAverageCloudCover.
+ * Returns cached value if available, otherwise falls back to climatological data immediately.
+ */
+function getAverageCloudCoverSync(month) {
+    const cacheKey = `${currentLocation.lat.toFixed(2)}_${currentLocation.lon.toFixed(2)}_${month}`;
+    if (cloudCoverInMemoryCache[cacheKey]) {
+        return cloudCoverInMemoryCache[cacheKey];
+    }
+    // Synchronous fallback
+    const cloudCover = getTypicalCloudCover(currentLocation.lat, month);
+    return `${cloudCover}%|climatological`;
 }
 
 function renderReportTable(data) {
