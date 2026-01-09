@@ -816,7 +816,6 @@ function formatTime(date, timeZone) {
         return new Intl.DateTimeFormat('en-US', {
             hour: '2-digit',
             minute: '2-digit',
-            second: '2-digit',
             hour12: false,
             timeZone: timeZone,
             hourCycle: 'h23'
@@ -826,8 +825,7 @@ function formatTime(date, timeZone) {
         // Fallback to browser's local time if timezone is invalid
         const hours = date.getHours().toString().padStart(2, '0');
         const minutes = date.getMinutes().toString().padStart(2, '0');
-        const seconds = date.getSeconds().toString().padStart(2, '0');
-        return `${hours}:${minutes}:${seconds}`;
+        return `${hours}:${minutes}`;
     }
 }
 
@@ -1257,7 +1255,7 @@ async function exportSplitScreenVideo() {
             tempCtx.fillText("Topographic Sunrise", textX, y += 20);
             tempCtx.fillText(locationText, textX, y += 25);
             tempCtx.fillText(`Date         : ${sunriseDate.toLocaleDateString([], { timeZone: selectedTimezone })}`, textX, y += 25);
-            tempCtx.fillText(`Topo Sunrise : ${sunriseDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, timeZone: selectedTimezone })}`, textX, y += 25);
+            tempCtx.fillText(`Topo Sunrise : ${sunriseDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: selectedTimezone })}`, textX, y += 25);
             tempCtx.fillText(`Astro Sunrise: ${formatTime(astronomicalTimes.sunrise, selectedTimezone)}`, textX, y += 25);
             tempCtx.fillText(`Sunrise Diff : ${formatTimeDiff(sunriseDiffMs)}`, textX, y += 25);
             tempCtx.fillText(`Total Lost   : ${formatTimeDiff(totalLostMs)}`, textX, y += 25);
@@ -1275,7 +1273,7 @@ async function exportSplitScreenVideo() {
             tempCtx.fillText("Topographic Sunset", rightTextX, y += 20);
             tempCtx.fillText(locationText, rightTextX, y += 25);
             tempCtx.fillText(`Date        : ${sunsetDate.toLocaleDateString([], { timeZone: selectedTimezone })}`, rightTextX, y += 25);
-            tempCtx.fillText(`Topo Sunset : ${sunsetDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, timeZone: selectedTimezone })}`, rightTextX, y += 25);
+            tempCtx.fillText(`Topo Sunset : ${sunsetDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: selectedTimezone })}`, rightTextX, y += 25);
             tempCtx.fillText(`Astro Sunset: ${formatTime(astronomicalTimes.sunset, selectedTimezone)}`, rightTextX, y += 25);
             tempCtx.fillText(`Sunset Diff : ${formatTimeDiff(sunsetDiffMs)}`, rightTextX, y += 25);
             tempCtx.fillText(`Total Lost  : ${formatTimeDiff(totalLostMs)}`, rightTextX, y += 25);
@@ -1713,7 +1711,7 @@ function exportLandscape() {
     const sunset = `Sunset: ${formatTime(SunCalc.getTimes(selectedDate, currentLocation.lat, currentLocation.lon).sunset, selectedTimezone)}`;
     const topoSunset = `Topo Sunset: ${document.getElementById('topo-sunset-time').textContent}`;
     const date = `Date: ${selectedDate.toLocaleDateString([], { timeZone: selectedTimezone })}`;
-    const time = `Time: ${selectedDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, timeZone: selectedTimezone })}`;
+    const time = `Time: ${selectedDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: selectedTimezone })}`;
     const timezoneText = `Timezone: ${selectedTimezone.replace(/_/g, ' ')}`;
 
     const textLines = [date, time, timezoneText, location, sunrise, topoSunrise, sunset, topoSunset];
@@ -2106,19 +2104,17 @@ function formatTimeDiff(ms) {
     if (isNaN(ms)) return 'N/A';
     const sign = ms < 0 ? '-' : '+';
     const delta = Math.abs(ms);
-    const seconds = Math.floor((delta / 1000) % 60);
     const minutes = Math.floor((delta / (1000 * 60)) % 60);
     const hours = Math.floor(delta / (1000 * 60 * 60));
-    return `${sign}${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+    return `${sign}${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
 }
 
 function formatDuration(ms) {
-    if (isNaN(ms) || ms < 0) return '00:00:00';
+    if (isNaN(ms) || ms < 0) return '00:00';
     const delta = Math.abs(ms);
-    const seconds = Math.floor((delta / 1000) % 60);
     const minutes = Math.floor((delta / (1000 * 60)) % 60);
     const hours = Math.floor(delta / (1000 * 60 * 60));
-    return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+    return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
 }
 
 async function getReportDataForDate(date, customLabel) {
