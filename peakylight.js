@@ -423,6 +423,86 @@ function createSkirtedPlaneGeometry(width, height, widthSegments, heightSegments
     return geometry;
 }
 
+const noiseFunctions = `
+// --- Noise Functions (Shared) ---
+float hash(float n) { return fract(sin(n) * 753.5453123); }
+float noise(vec3 x) {
+    vec3 p = floor(x);
+    vec3 f = fract(x);
+    f = f * f * (3.0 - 2.0 * f);
+    float n = p.x + p.y * 157.0 + 113.0 * p.z;
+    return mix(mix(mix(hash(n + 0.0), hash(n + 1.0), f.x),
+                   mix(hash(n + 157.0), hash(n + 158.0), f.x), f.y),
+               mix(mix(hash(n + 113.0), hash(n + 114.0), f.x),
+                   mix(hash(n + 270.0), hash(n + 271.0), f.x), f.y), f.z);
+}
+
+float fbm(vec3 p) {
+    float f = 0.0;
+    float w = 0.5;
+    for (int i = 0; i < 4; i++) { 
+        f += w * noise(p);
+        p *= 2.02;
+        w *= 0.5;
+    }
+    return f;
+}
+`;
+
+function setupTerrainMaterial(material) {
+    material.onBeforeCompile = (shader) => {
+        shader.uniforms.uTime = { value: 0 };
+        shader.uniforms.uCloudCover = { value: 0.5 };
+        shader.uniforms.uSunPosition = { value: new THREE.Vector3(0, 1, 0) };
+        material.userData.shader = shader;
+
+        shader.vertexShader = `
+            varying vec3 vWorldPosition;
+            ${shader.vertexShader}
+        `.replace(
+            '#include <worldpos_vertex>',
+            `
+            #include <worldpos_vertex>
+            vWorldPosition = (modelMatrix * vec4(transformed, 1.0)).xyz;
+            `
+        );
+
+        shader.fragmentShader = `
+            uniform float uTime;
+            uniform float uCloudCover;
+            uniform vec3 uSunPosition;
+            varying vec3 vWorldPosition;
+            ${noiseFunctions}
+            ${shader.fragmentShader}
+        `.replace(
+            '#include <dithering_fragment>',
+            `
+            #include <dithering_fragment>
+            
+            vec3 sunDir = normalize(uSunPosition);
+            float cloudHeight = 15.0;
+            
+            if (sunDir.y > 0.0) {
+                float t = (cloudHeight - vWorldPosition.y) / sunDir.y;
+                if (t > 0.0) {
+                    vec3 cloudPos = vWorldPosition + sunDir * t;
+                    vec3 p = cloudPos * 0.15;
+                    p.x += uTime * 0.05;
+                    p.z += uTime * 0.02;
+                    
+                    float noiseVal = fbm(p);
+                    float cloudThreshold = 1.1 - uCloudCover;
+                    float shadow = smoothstep(cloudThreshold - 0.1, cloudThreshold + 0.1, noiseVal);
+                    
+                    // 30% opacity shadow
+                    gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(0.0), shadow * 0.3);
+                }
+            }
+            `
+        );
+    };
+}
+
 function setupScene() {
     terrainGrid = new THREE.Group();
     scene.add(terrainGrid);
@@ -434,6 +514,7 @@ function setupScene() {
             const skirtDepth = 1; // A reasonable depth for skirts to hide seams.
             const terrainGeometry = createSkirtedPlaneGeometry(TILE_BASE_SIZE, TILE_BASE_SIZE, 255, 255, skirtDepth);
             const terrainMaterial = new THREE.MeshStandardMaterial({ color: 0xcccccc, side: THREE.FrontSide });
+            setupTerrainMaterial(terrainMaterial);
             const terrainMesh = new THREE.Mesh(terrainGeometry, terrainMaterial);
             terrainMesh.rotation.x = -Math.PI / 2;
             terrainMesh.receiveShadow = true;
@@ -1781,6 +1862,18 @@ function animate() {
         if (sunLight) {
             cloudMaterial.uniforms.uSunPosition.value.copy(sunLight.position);
         }
+    }
+
+    if (terrainGrid && terrainGrid.children) {
+        terrainGrid.children.forEach(child => {
+            if (child.material && child.material.userData.shader) {
+                child.material.userData.shader.uniforms.uTime.value = cloudMaterial ? cloudMaterial.uniforms.uTime.value : performance.now() * 0.001;
+                child.material.userData.shader.uniforms.uCloudCover.value = cloudMaterial ? cloudMaterial.uniforms.uCloudCover.value : 0.5;
+                if (sunLight) {
+                    child.material.userData.shader.uniforms.uSunPosition.value.copy(sunLight.position);
+                }
+            }
+        });
     }
 
     // Prevent camera and target from going below ground during user navigation
